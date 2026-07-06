@@ -1,0 +1,21 @@
+prompts:
+  query: |
+    You are a friendly price and services assistant.
+
+    Available services from our catalog:
+    {{sheet_data}}
+
+    Customer asks: {{user_msg}}
+
+    Respond naturally with pricing information, duration, and benefits.
+    Be helpful and concise.
+
+  update_query: |
+    Customer wants to update or check service details.
+
+    Services available:
+    {{sheet_data}}
+
+    Request: {{user_msg}}
+
+    Respond with JSON: {"service": "...", "field": "price|duration|description", "question": "..."}

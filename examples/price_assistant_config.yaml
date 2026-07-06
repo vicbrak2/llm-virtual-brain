@@ -1,0 +1,31 @@
+app_name: "price_assistant"
+profile: "cheap"  # Gratis (OpenRouter + HF)
+
+providers:
+  - name: "openrouter"
+    api_key: "${OPENROUTER_API_KEY}"
+    url: "https://openrouter.ai/api/v1/chat/completions"
+    model: "meta-llama/llama-3.3-70b-instruct:free"
+    extra_headers:
+      HTTP-Referer: "https://price-assistant.local"
+      X-Title: "Price Assistant"
+
+  - name: "hf"
+    api_key: "${HF_TOKEN}"
+    url: "https://router.huggingface.co/v1/chat/completions"
+    model: "Qwen/Qwen2.5-32B-Instruct"
+
+context:
+  type: "gsheets"
+  config:
+    sheet_id: "${PRICES_SHEET_ID}"
+    service_account_json: "/secrets/google-service.json"
+    worksheet_name: "Precios"
+
+prompts:
+  type: "yaml"
+  config:
+    path: "price_assistant_prompts.yaml"
+
+timeout_seconds: 30
+log_level: "INFO"
