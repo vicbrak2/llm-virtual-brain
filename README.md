@@ -31,6 +31,23 @@ A Python library that abstracts multi-LLM orchestration, context enrichment, and
 | **Parameterizable** | YAML/JSON config (no code changes for new apps) |
 | **Zero Lock-In** | Each provider is OpenAI-compatible REST (swap freely) |
 
+## 💬 Chat UI Unificado (Brain Server)
+
+Interfaz gráfica incluida: chat multi-provider con perfiles conmutables y subida de
+archivos TXT que quedan registrados como base de conocimiento (local + Google Sheets vía GAS).
+
+```bash
+pip install "llm-virtual-brain[server]"
+python -m brain.server --profiles ./profiles --port 8080
+# Abre http://localhost:8080 → UI de chat (ui/brain-chat.html)
+```
+
+- **Perfiles** = archivos YAML en `profiles/` (formato BrainConfig + `description` + `storage`).
+- **Subida TXT**: drag & drop en la ventana → se guarda en `data/uploads/<perfil>/` y,
+  si el perfil define `storage.gas_url`, se registra en Google Sheets (ver `docs/GAS_SNIPPET.gs`).
+- **Contexto**: el chat inyecta automáticamente los documentos del perfil activo.
+- API: `GET /api/profiles`, `POST /api/profile/activate`, `POST /api/chat`, `POST /api/upload`, `GET /api/documents`, `GET /api/status`.
+
 ## 🚀 Quick Start
 
 ### 1. Install

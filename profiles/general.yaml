@@ -1,0 +1,32 @@
+# Perfil general: asistente de conocimiento sobre documentos subidos.
+description: "Asistente general — pregunta lo que quieras; usa tus TXT subidos como base de conocimiento"
+app_name: "brain_general"
+
+providers:
+  - name: "cerebras"
+    api_key: "${CEREBRAS_API_KEY}"
+  - name: "groq"
+    api_key: "${GROQ_API_KEY}"
+  - name: "openrouter"
+    api_key: "${OPENROUTER_API_KEY}"
+    extra_headers:
+      HTTP-Referer: "https://brain.local"
+      X-Title: "Brain Chat"
+  - name: "hf"
+    api_key: "${HF_TOKEN}"
+
+prompts:
+  type: "dict"
+  config:
+    prompts:
+      chat: |
+        Eres Brain, un asistente conversacional claro y directo.
+        Si hay documentos en la BASE DE CONOCIMIENTO, apóyate en ellos y cítalos por nombre.
+        Si no sabes algo, dilo. Responde en el idioma del usuario.
+
+# Opcional: registrar los TXT subidos en Google Sheets vía GAS.
+# storage:
+#   gas_url: "${BRAIN_GAS_URL}"
+#   sheet: "Documentos"
+
+timeout_seconds: 30

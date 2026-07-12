@@ -138,3 +138,6 @@ secrets/
 data/
 output/
 logs/
+
+data_test/
+server_test.log
