@@ -7,7 +7,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="llm-virtual-brain",
-    version="1.0.0",
+    version="1.1.0",
     author="Victor Martinez",
     author_email="vic.martinez777@gmail.com",
     description="Modular, parameterizable LLM orchestrator for utility apps",

@@ -1,21 +1,21 @@
 """Core Brain: Orquestador de LLM multi-proveedor con rotación dinámica."""
 
-import asyncio
 import json
 import re
 from dataclasses import dataclass
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Union
+
 import httpx
 
-from .errors import BrainError, ProviderError
-from .providers import Provider
-from .context import ContextProvider
-from .prompts import PromptLoader
+from .errors import BrainError
+from .providers import Provider, provider_from_dict
+from .context import ContextProvider, context_from_dict
+from .prompts import PromptLoader, loader_from_dict
 
 
 @dataclass
 class Message:
-    """Mensaje en la cadena LLM."""
+    """Mensaje en la conversación LLM."""
     role: str  # "system", "user", "assistant"
     content: str
 
@@ -27,31 +27,43 @@ class Brain:
     """
     Orquestador de LLM agnóstico y reutilizable.
 
-    Características:
-    - Rotación dinámica entre providers (si uno falla, intenta el siguiente).
+    - Rotación dinámica entre providers (si uno falla, intenta el siguiente
+      con los MISMOS mensajes — nunca pierde contexto).
     - Sticky: recuerda qué provider respondió bien para no reintentar caídos.
-    - Multi-etapa: puede encadenar formatter → analyzer → custom.
+    - Multi-etapa: formatter → analyzer → custom.
     - Contexto pluggable: Sheets, SQL, vault, custom.
-    - Agnóstico: funciona para task manager, contraseñas, precios, etc.
+
+    Se puede construir de dos formas:
+        Brain(config)                          # BrainConfig (de load_config_from_yaml)
+        Brain(providers=[...], ...)            # componentes explícitos
     """
 
     def __init__(
         self,
-        providers: List[Provider],
+        config=None,
+        *,
+        providers: Optional[List[Provider]] = None,
         context_provider: Optional[ContextProvider] = None,
         prompt_loader: Optional[PromptLoader] = None,
         timeout_seconds: int = 30,
-        app_name: str = "brain_app"
+        app_name: str = "brain_app",
     ):
-        """
-        Args:
-            providers: Lista de Provider en orden de preferencia.
-            context_provider: Cargador de contexto (opcional).
-            prompt_loader: Cargador de prompts (opcional).
-            timeout_seconds: Timeout HTTP para requests a providers.
-            app_name: Nombre de la app (para logging).
-        """
-        self.providers = providers
+        if config is not None:
+            # Construcción desde BrainConfig
+            providers = [
+                provider_from_dict(p if isinstance(p, dict) else p.model_dump())
+                for p in config.providers
+            ]
+            ctx = getattr(config, "context", None)
+            if ctx is not None and getattr(ctx, "type", "none") != "none":
+                context_provider = context_from_dict({"type": ctx.type, **ctx.config})
+            pr = getattr(config, "prompts", None)
+            if pr is not None:
+                prompt_loader = loader_from_dict({"type": pr.type, **pr.config})
+            timeout_seconds = getattr(config, "timeout_seconds", timeout_seconds)
+            app_name = getattr(config, "app_name", app_name)
+
+        self.providers = providers or []
         self.context_provider = context_provider
         self.prompt_loader = prompt_loader
         self.timeout_seconds = timeout_seconds
@@ -59,53 +71,50 @@ class Brain:
 
         # Estado sticky (rotación dinámica)
         self._active_idx = 0
-        self._last_used = None
+        self._last_used: Optional[str] = None
 
         if not self.providers:
-            raise BrainError("At least one provider is required")
+            raise BrainError("Se requiere al menos un provider")
 
+    # ── API de bajo nivel: mensajes ya construidos ─────────────────────────
+    async def complete(
+        self,
+        messages: List[Union[Dict, Message]],
+        max_tokens: int = 600,
+        temperature: float = 0.2,
+    ) -> str:
+        """
+        Completar una conversación ya construida (lista de dicts o Message).
+        Ideal cuando la app arma sus propios messages (historial, contexto custom).
+        Rota providers automáticamente si alguno falla.
+        """
+        return await self._call_providers_chain(messages, max_tokens, temperature)
+
+    # ── API de alto nivel: prompt por etapa + contexto ─────────────────────
     async def think(
         self,
         user_msg: str,
         context_data: Optional[Dict] = None,
         max_tokens: int = 600,
         temperature: float = 0.2,
-        stage_name: str = "default"
+        stage_name: str = "default",
     ) -> str:
         """
-        Piensa (consulta LLM) respecto a un mensaje del usuario.
-
-        Args:
-            user_msg: Mensaje del usuario.
-            context_data: Datos de contexto (tareas, precios, etc.).
-            max_tokens: Límite de tokens en la respuesta.
-            temperature: Creatividad (0.0 = determinista).
-            stage_name: Nombre del prompt/etapa a usar.
-
-        Returns:
-            str: Respuesta del LLM.
-
-        Raises:
-            BrainError: Si todos los providers fallan.
+        Consultar al LLM: carga el prompt de la etapa, enriquece contexto
+        (si hay ContextProvider) y llama a la cadena de providers.
         """
-        # 1. Cargar prompt
         system_prompt = ""
         if self.prompt_loader:
             system_prompt = self.prompt_loader.get(stage_name)
 
-        # 2. Enriquecer contexto
-        enriched = context_data or {}
+        enriched = dict(context_data or {})
         if self.context_provider:
             try:
                 enriched = await self.context_provider.enrich(user_msg, enriched)
             except Exception as e:
-                print(f"[brain] context enrichment failed: {e}")
-                # Continuar sin contexto si falla
+                print(f"[brain] contexto falló (continúo sin él): {e}")
 
-        # 3. Construir messages
         messages = self._build_messages(system_prompt, user_msg, enriched)
-
-        # 4. Llamar a providers en cadena
         return await self._call_providers_chain(messages, max_tokens, temperature)
 
     async def think_json(
@@ -114,36 +123,35 @@ class Brain:
         context_data: Optional[Dict] = None,
         max_tokens: int = 900,
         temperature: float = 0.0,
-        stage_name: str = "default"
+        stage_name: str = "default",
     ) -> Dict:
-        """Igual que think() pero parseando JSON de la respuesta."""
+        """Igual que think() pero parseando el primer JSON de la respuesta."""
         raw = await self.think(user_msg, context_data, max_tokens, temperature, stage_name)
-        return self._extract_json(raw)
+        parsed = extract_json(raw)
+        if parsed is None:
+            raise BrainError(f"Sin JSON válido en la respuesta: {raw[:200]}")
+        return parsed
 
     async def think_multi_stage(
         self,
         user_msg: str,
         stages: List[str],
-        context_data: Optional[Dict] = None
+        context_data: Optional[Dict] = None,
     ) -> str:
-        """
-        Ejecuta múltiples etapas secuencialmente.
-
-        Ejemplo: formatter → analyzer
-        La salida de formatter se usa como input del analyzer.
-        """
+        """Ejecuta etapas en secuencia; la salida de una alimenta la siguiente."""
         result = user_msg
         for stage in stages:
             result = await self.think(result, context_data, stage_name=stage)
         return result
 
+    # ── Internals ───────────────────────────────────────────────────────────
     async def _call_providers_chain(
         self,
-        messages: List[Message],
+        messages: List,
         max_tokens: int,
-        temperature: float
+        temperature: float,
     ) -> str:
-        """Intenta providers en cadena con rotación dinámica y sticky."""
+        """Cadena con rotación dinámica y sticky index."""
         n = len(self.providers)
         errors = []
 
@@ -151,102 +159,78 @@ class Brain:
             for offset in range(n):
                 idx = (self._active_idx + offset) % n
                 provider = self.providers[idx]
-
                 try:
                     response = await self._call_provider(
                         client, provider, messages, max_tokens, temperature
                     )
-
-                    # Log si rotó
-                    if offset > 0:
-                        print(f"[brain] rotación dinám → {provider.name} ({provider.model})")
-
-                    # Sticky: recordar que este provider respondió
+                    if offset:
+                        print(f"[brain] rotación dinámica → {provider.name} ({provider.model})")
                     self._active_idx = idx
                     self._last_used = provider.name
-
                     return response
-
                 except Exception as e:
-                    error_msg = str(e)[:100]
-                    errors.append(f"{provider.name}: {error_msg}")
-                    print(f"[brain] {provider.name} failed, trying next: {error_msg}")
+                    body = ""
+                    resp = getattr(e, "response", None)
+                    if resp is not None:
+                        try:
+                            body = resp.text[:120]
+                        except Exception:
+                            body = ""
+                    errors.append(f"{provider.name}: {str(e)[:80]} {body}".strip())
                     continue
 
-        error_summary = " | ".join(errors)
-        raise BrainError(f"Todos los providers fallaron: {error_summary}")
+        raise BrainError("Todos los providers fallaron · " + " | ".join(errors))
 
     async def _call_provider(
         self,
         client: httpx.AsyncClient,
         provider: Provider,
-        messages: List[Message],
+        messages: List,
         max_tokens: int,
-        temperature: float
+        temperature: float,
     ) -> str:
-        """Llama a un provider individual."""
         headers = provider.get_headers()
         payload = provider.get_payload(messages, max_tokens, temperature)
 
         r = await client.post(provider.url, headers=headers, json=payload)
         r.raise_for_status()
 
-        response_json = r.json()
-        content = provider.parse_response(response_json)
-
+        content = provider.parse_response(r.json())
         if not content.strip():
-            raise ValueError("Respuesta vacía del LLM")
-
+            raise ValueError("respuesta vacía (sin content)")
         return content
 
-    def _build_messages(
-        self,
-        system_prompt: str,
-        user_msg: str,
-        context: Dict
-    ) -> List[Message]:
-        """Construir lista de messages con sistema + contexto + usuario."""
+    def _build_messages(self, system_prompt: str, user_msg: str, context: Dict) -> List[Message]:
         messages = []
-
-        # Sistema
         if system_prompt:
             messages.append(Message(role="system", content=system_prompt))
-
-        # Contexto como mensaje de sistema adicional (evita confusión)
         if context:
             context_str = json.dumps(context, ensure_ascii=False, indent=2)
-            messages.append(Message(
-                role="system",
-                content=f"CONTEXTO:\n{context_str}"
-            ))
-
-        # Usuario
+            messages.append(Message(role="system", content=f"CONTEXTO:\n{context_str}"))
         messages.append(Message(role="user", content=user_msg))
-
         return messages
 
-    def _extract_json(self, text: str) -> Dict:
-        """Extraer primer JSON válido de un texto."""
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        raise BrainError(f"No valid JSON found in response: {text[:200]}")
-
     def status(self) -> Dict:
-        """Estado actual de Brain."""
+        """Estado actual: provider activo, cadena configurada."""
+        active = self._last_used or (self.providers[self._active_idx].name if self.providers else None)
         return {
             "app": self.app_name,
-            "active": self._last_used or self.providers[self._active_idx].name,
-            "providers_count": len(self.providers),
+            "enabled": bool(self.providers),
+            "active": active,
+            "count": len(self.providers),
             "providers": [
-                {
-                    "order": i,
-                    "name": p.name,
-                    "model": p.model
-                }
+                {"order": i, "name": p.name, "model": p.model}
                 for i, p in enumerate(self.providers)
-            ]
+            ],
         }
+
+
+def extract_json(text: str) -> Optional[Dict]:
+    """Extraer el primer objeto JSON de un texto (o None)."""
+    try:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception:
+        pass
+    return None

@@ -8,30 +8,83 @@ Ejemplos de uso:
   - Knowledge Bot (RAG conversacional)
 """
 
-from .core import Brain, BrainError
-from .config import BrainConfig, BrainProfile, ProviderConfig, load_config_from_yaml, load_config_from_env
-from .providers import Provider, OpenAIProvider
-from .context import ContextProvider, NoContext, GoogleSheetsContext, SQLiteContext, PasswordVaultContext
-from .prompts import PromptLoader, YAMLPromptLoader, JSONPromptLoader, DictPromptLoader
+from .core import Brain, Message, extract_json
+from .errors import BrainError, ProviderError, ContextError, PromptError, ConfigError
+from .config import (
+    BrainConfig,
+    BrainProfile,
+    ProviderConfig,
+    ContextConfig,
+    PromptConfig,
+    load_config_from_yaml,
+    load_config_from_json,
+    load_config_from_env,
+    get_profile_providers,
+)
+from .providers import (
+    Provider,
+    OpenAIProvider,
+    KNOWN_PROVIDERS,
+    provider_from_dict,
+    CerebrasProvider,
+    GroqProvider,
+    HuggingFaceProvider,
+    OpenRouterProvider,
+)
+from .context import (
+    ContextProvider,
+    NoContext,
+    GoogleSheetsContext,
+    SQLiteContext,
+    PasswordVaultContext,
+    JSONFileContext,
+    context_from_dict,
+)
+from .prompts import (
+    PromptLoader,
+    YAMLPromptLoader,
+    JSONPromptLoader,
+    DictPromptLoader,
+    loader_from_dict,
+)
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __all__ = [
     "Brain",
+    "Message",
+    "extract_json",
     "BrainError",
+    "ProviderError",
+    "ContextError",
+    "PromptError",
+    "ConfigError",
     "BrainConfig",
     "BrainProfile",
     "ProviderConfig",
+    "ContextConfig",
+    "PromptConfig",
+    "load_config_from_yaml",
+    "load_config_from_json",
+    "load_config_from_env",
+    "get_profile_providers",
     "Provider",
     "OpenAIProvider",
+    "KNOWN_PROVIDERS",
+    "provider_from_dict",
+    "CerebrasProvider",
+    "GroqProvider",
+    "HuggingFaceProvider",
+    "OpenRouterProvider",
     "ContextProvider",
     "NoContext",
     "GoogleSheetsContext",
     "SQLiteContext",
     "PasswordVaultContext",
+    "JSONFileContext",
+    "context_from_dict",
     "PromptLoader",
     "YAMLPromptLoader",
     "JSONPromptLoader",
     "DictPromptLoader",
-    "load_config_from_yaml",
-    "load_config_from_env",
+    "loader_from_dict",
 ]

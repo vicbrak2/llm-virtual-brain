@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-virtual-brain"
-version = "1.0.0"
+version = "1.1.0"
 description = "Modular, parameterizable LLM orchestrator for utility apps (task manager, price assistant, password manager, knowledge bot, etc.)"
 readme = "README.md"
 requires-python = ">=3.9"

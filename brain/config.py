@@ -1,166 +1,146 @@
-"""Configuración de Brain (pydantic models + loaders)."""
+"""Configuración de Brain (modelos pydantic + loaders YAML/JSON/env)."""
 
 import os
+import re
 from enum import Enum
-from typing import Dict, List, Optional
 from pathlib import Path
+from typing import Dict, List, Optional
 
-try:
-    from pydantic import BaseModel, Field, validator
-except ImportError:
-    # Fallback: usar dataclass si Pydantic no está disponible
-    from dataclasses import dataclass as BaseModel
-    Field = lambda **kwargs: None
-    def validator(*args, **kwargs):
-        return lambda f: f
+from pydantic import BaseModel, Field
 
 
 class BrainProfile(str, Enum):
     """Perfiles predefinidos de cadenas de providers."""
-    FAST = "fast"           # Groq → OpenRouter → HF (rápido + gratis)
-    SMART = "smart"         # Cerebras → Groq (reasoning + fallback)
-    CHEAP = "cheap"         # OpenRouter:free → HF (solo free)
-    RESILIENT = "resilient" # Todos (máxima resiliencia)
+    FAST = "fast"            # Groq → OpenRouter → HF (rápido + gratis)
+    SMART = "smart"          # Cerebras → Groq (reasoning + fallback)
+    CHEAP = "cheap"          # OpenRouter:free → HF (solo free)
+    RESILIENT = "resilient"  # Todos (máxima resiliencia)
 
 
 class ProviderConfig(BaseModel):
-    """Configuración de un proveedor LLM."""
+    """Configuración de un proveedor LLM. url/model/token_param son opcionales
+    para nombres conocidos (se completan con defaults de KNOWN_PROVIDERS)."""
     name: str
-    api_key: str
-    url: str
-    model: str
-    token_param: str = "max_tokens"
-    extra_headers: Dict = {}
-    extra_body: Dict = {}
-
-    class Config:
-        use_enum_values = True
+    api_key: str = ""
+    url: str = ""
+    model: str = ""
+    token_param: str = ""
+    extra_headers: Dict = Field(default_factory=dict)
+    extra_body: Dict = Field(default_factory=dict)
 
 
 class ContextConfig(BaseModel):
     """Configuración del proveedor de contexto."""
     type: str = "none"  # none, gsheets, sqlite, password_vault, json
-    config: Dict = {}   # Parámetros específicos del tipo
+    config: Dict = Field(default_factory=dict)
 
 
 class PromptConfig(BaseModel):
     """Configuración del cargador de prompts."""
     type: str = "dict"  # dict, yaml, json
-    config: Dict = {}   # Parámetros específicos del tipo
+    config: Dict = Field(default_factory=dict)
 
 
 class BrainConfig(BaseModel):
     """Configuración completa de Brain."""
-    app_name: str = Field(default="brain_app", description="Nombre de la aplicación")
+    app_name: str = "brain_app"
     profile: Optional[BrainProfile] = None
     providers: List[ProviderConfig] = Field(default_factory=list)
-    context: ContextConfig = Field(default_factory=lambda: ContextConfig())
-    prompts: PromptConfig = Field(default_factory=lambda: PromptConfig())
+    context: ContextConfig = Field(default_factory=ContextConfig)
+    prompts: PromptConfig = Field(default_factory=PromptConfig)
     timeout_seconds: int = 30
     log_level: str = "INFO"
 
-    class Config:
-        use_enum_values = True
-
 
 def load_config_from_yaml(yaml_path: str) -> BrainConfig:
-    """Cargar configuración desde archivo YAML."""
+    """Cargar configuración desde YAML (con substitución ${VAR} / ${VAR:default})."""
     try:
         import yaml
     except ImportError:
-        raise ImportError("load_config_from_yaml requires PyYAML: pip install pyyaml")
+        raise ImportError("load_config_from_yaml requiere PyYAML: pip install pyyaml")
 
-    yaml_path = Path(yaml_path)
-    if not yaml_path.exists():
-        raise FileNotFoundError(f"Config file not found: {yaml_path}")
+    path = Path(yaml_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config no encontrada: {path}")
 
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
 
-    # Substituir variables de entorno (${VAR_NAME})
-    data = _substitute_env_vars(data)
-
-    return BrainConfig(**data)
+    return BrainConfig(**_substitute_env_vars(data))
 
 
 def load_config_from_json(json_path: str) -> BrainConfig:
-    """Cargar configuración desde archivo JSON."""
-    import json
+    """Cargar configuración desde JSON (con substitución de env vars)."""
+    import json as _json
 
-    json_path = Path(json_path)
-    if not json_path.exists():
-        raise FileNotFoundError(f"Config file not found: {json_path}")
+    path = Path(json_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config no encontrada: {path}")
 
-    with open(json_path) as f:
-        data = json.load(f)
+    with open(path, encoding="utf-8") as f:
+        data = _json.load(f)
 
-    # Substituir variables de entorno
-    data = _substitute_env_vars(data)
-
-    return BrainConfig(**data)
+    return BrainConfig(**_substitute_env_vars(data))
 
 
 def load_config_from_env() -> BrainConfig:
-    """Cargar configuración desde variables de entorno."""
-    import json
+    """Cargar configuración desde variables de entorno.
 
-    providers_json = os.getenv("BRAIN_PROVIDERS", "[]")
+    BRAIN_APP_NAME, BRAIN_PROVIDERS (JSON list), BRAIN_CONTEXT_TYPE,
+    BRAIN_CONTEXT_CONFIG (JSON dict).
+    """
+    import json as _json
+
     try:
-        providers = [ProviderConfig(**p) for p in json.loads(providers_json)]
-    except:
+        providers = [ProviderConfig(**p) for p in _json.loads(os.getenv("BRAIN_PROVIDERS", "[]"))]
+    except Exception:
         providers = []
 
-    context_json = os.getenv("BRAIN_CONTEXT_CONFIG", "{}")
-    context_config = json.loads(context_json)
+    try:
+        context_config = _json.loads(os.getenv("BRAIN_CONTEXT_CONFIG", "{}"))
+    except Exception:
+        context_config = {}
 
     return BrainConfig(
         app_name=os.getenv("BRAIN_APP_NAME", "brain_app"),
         providers=providers,
         context=ContextConfig(
             type=os.getenv("BRAIN_CONTEXT_TYPE", "none"),
-            config=context_config
-        )
+            config=context_config,
+        ),
     )
 
 
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}")
+
+
 def _substitute_env_vars(data):
-    """Recursivamente substituir ${VAR_NAME} con valores de entorno."""
+    """Substituir recursivamente ${VAR} y ${VAR:default} con valores de entorno."""
     if isinstance(data, dict):
         return {k: _substitute_env_vars(v) for k, v in data.items()}
-    elif isinstance(data, list):
+    if isinstance(data, list):
         return [_substitute_env_vars(item) for item in data]
-    elif isinstance(data, str):
-        # Buscar ${VAR_NAME} y substituir
-        import re
+    if isinstance(data, str):
         def replacer(match):
-            var_name = match.group(1)
-            return os.getenv(var_name, match.group(0))  # Si no existe, dejar como está
-        return re.sub(r'\$\{([^}]+)\}', replacer, data)
-    else:
-        return data
+            var, default = match.group(1), match.group(2)
+            val = os.getenv(var)
+            if val is not None:
+                return val
+            if default is not None:
+                return default
+            return match.group(0)  # sin valor ni default → dejar tal cual
+        return _ENV_VAR_RE.sub(replacer, data)
+    return data
 
 
 def get_profile_providers(profile: BrainProfile) -> List[Dict]:
-    """Retornar configuración de providers por perfil."""
+    """Cadena de providers sugerida por perfil (las keys van por env)."""
     profiles = {
-        BrainProfile.FAST: [
-            {"name": "groq"},
-            {"name": "openrouter"},
-            {"name": "hf"}
-        ],
-        BrainProfile.SMART: [
-            {"name": "cerebras"},
-            {"name": "groq"}
-        ],
-        BrainProfile.CHEAP: [
-            {"name": "openrouter"},
-            {"name": "hf"}
-        ],
+        BrainProfile.FAST: [{"name": "groq"}, {"name": "openrouter"}, {"name": "hf"}],
+        BrainProfile.SMART: [{"name": "cerebras"}, {"name": "groq"}],
+        BrainProfile.CHEAP: [{"name": "openrouter"}, {"name": "hf"}],
         BrainProfile.RESILIENT: [
-            {"name": "cerebras"},
-            {"name": "groq"},
-            {"name": "openrouter"},
-            {"name": "hf"}
-        ]
+            {"name": "cerebras"}, {"name": "groq"}, {"name": "openrouter"}, {"name": "hf"}
+        ],
     }
     return profiles.get(profile, [])
