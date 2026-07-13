@@ -18,7 +18,9 @@ Perfiles: archivos YAML en --profiles (formato BrainConfig) con extras opcionale
 
 import json
 import os
+import re
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -33,6 +35,63 @@ from .core import Brain
 MAX_DOC_CHARS = 60_000          # límite por documento subido
 CONTEXT_BUDGET_CHARS = 12_000   # presupuesto de contexto de documentos por chat
 
+# ── Formato de intercambio con agentes externos ─────────────────────────────
+# El prompt generado le exige al agente externo responder SOLO con este XML;
+# /api/import lo parsea, lo persiste (local + Sheets) y lo suma al contexto.
+IMPORT_FORMAT_SPEC = """FORMATO DE RESPUESTA OBLIGATORIO — responde ÚNICAMENTE con este bloque XML, sin texto antes ni después:
+
+<brain-import profile="{profile}" sheet="{sheet}">
+  <schema>
+{schema_fields}
+  </schema>
+  <row>
+{example_row}
+  </row>
+  <!-- repite <row> por cada registro -->
+</brain-import>
+
+REGLAS DEL FORMATO:
+1. Solo el XML. Sin markdown, sin ```, sin explicaciones.
+2. Cada <row> debe tener exactamente los campos del <schema>, en el mismo orden.
+3. Valores de texto plano (sin HTML). Usa "" si un dato no existe.
+4. Números sin separador de miles; decimales con punto.
+5. Escapa los caracteres especiales XML: & → &amp;  < → &lt;  > → &gt;"""
+
+
+def parse_brain_import(content: str) -> Optional[Dict]:
+    """Extraer y parsear el primer bloque <brain-import> de un texto.
+    Devuelve {profile, sheet, headers, rows} o None si no hay bloque."""
+    match = re.search(r"<brain-import\b.*?</brain-import>", content, re.DOTALL)
+    if not match:
+        return None
+    xml_text = match.group(0)
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as e:
+        raise ValueError(f"XML inválido: {e}")
+
+    headers: List[str] = [
+        f.get("name", "").strip()
+        for f in root.findall("./schema/field")
+        if f.get("name", "").strip()
+    ]
+    rows: List[List[str]] = []
+    for row_el in root.findall("./row"):
+        if not headers:  # sin schema explícito: inferir del primer row
+            headers = [child.tag for child in row_el]
+        row_map = {child.tag: (child.text or "").strip() for child in row_el}
+        rows.append([row_map.get(h, "") for h in headers])
+
+    if not headers or not rows:
+        raise ValueError("El bloque brain-import no tiene schema/filas válidas")
+
+    return {
+        "profile": root.get("profile", ""),
+        "sheet": root.get("sheet", "Datos"),
+        "headers": headers,
+        "rows": rows,
+    }
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -44,6 +103,17 @@ class ChatRequest(BaseModel):
 
 class ActivateRequest(BaseModel):
     name: str
+
+
+class GeneratePromptRequest(BaseModel):
+    objective: str                 # qué datos debe producir el agente externo
+    profile: Optional[str] = None
+    sheet: Optional[str] = None    # hoja destino (default: storage.sheet o "Datos")
+
+
+class ImportRequest(BaseModel):
+    content: str                   # respuesta del agente externo (contiene <brain-import>)
+    profile: Optional[str] = None
 
 
 class ProfileRuntime:
@@ -248,16 +318,140 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         st = p.brain.status()
         return {"reply": reply, "provider": st["active"], "profile": p.name}
 
+    async def push_rows_to_sheets(p: ProfileRuntime, sheet: str, headers: List[str], rows: List[List[str]]) -> str:
+        """Registrar filas estructuradas en Google Sheets vía GAS (action=appendRows)."""
+        gas_url = p.storage.get("gas_url", "")
+        if not gas_url:
+            return "no_configurado"
+        try:
+            async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:
+                r = await client.post(gas_url, data={
+                    "action": "appendRows",
+                    "sheet": sheet,
+                    "profile": p.name,
+                    "headers": json.dumps(headers, ensure_ascii=False),
+                    "rows": json.dumps(rows, ensure_ascii=False),
+                })
+                r.raise_for_status()
+            return "ok"
+        except Exception as e:
+            return f"error: {str(e)[:120]}"
+
+    async def do_import(p: ProfileRuntime, data: Dict) -> Dict:
+        """Persistir un brain-import: tabla local + doc de contexto + Sheets."""
+        sheet = data["sheet"] or p.storage.get("sheet", "Datos")
+        headers, rows = data["headers"], data["rows"]
+
+        # 1) Tabla estructurada local
+        tables_dir = p.docs_dir.parent.parent / "tables" / p.name
+        tables_dir.mkdir(parents=True, exist_ok=True)
+        table_path = tables_dir / f"{sheet}.json"
+        existing = {"headers": headers, "rows": []}
+        if table_path.exists():
+            try:
+                existing = json.loads(table_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if existing.get("headers") == headers:
+            existing["rows"].extend(rows)
+        else:
+            existing = {"headers": headers, "rows": rows}
+        table_path.write_text(json.dumps(existing, ensure_ascii=False, indent=1), encoding="utf-8")
+
+        # 2) Como documento CSV → entra al contexto del chat (brain lo interpreta)
+        csv_lines = [";".join(headers)] + [";".join(str(c) for c in r) for r in rows]
+        entry = p.register_document(f"[tabla] {sheet}.csv", "\n".join(csv_lines))
+
+        # 3) Google Sheets (filas estructuradas)
+        sheets_status = await push_rows_to_sheets(p, sheet, headers, rows)
+        if sheets_status == "ok":
+            p.mark_sheet_ok(entry["stored_as"])
+
+        return {
+            "sheet": sheet,
+            "headers": headers,
+            "rows_imported": len(rows),
+            "rows_total": len(existing["rows"]),
+            "sheets": sheets_status,
+            "registered": entry,
+        }
+
+    @app.post("/api/prompt/generate")
+    async def generate_prompt(body: GeneratePromptRequest):
+        """Generar un prompt autocontenido para ejecutar en un agente externo.
+        La respuesta del agente vendrá en formato <brain-import> lista para /api/import."""
+        p = get_profile(body.profile)
+        sheet = body.sheet or p.storage.get("sheet", "Datos")
+
+        # El LLM propone el schema de campos según el objetivo
+        fields: List[str] = []
+        try:
+            raw = await p.brain.complete([
+                {"role": "system", "content":
+                    "Diseñas schemas tabulares. Dado un objetivo de recolección de datos, responde SOLO "
+                    "un JSON: {\"fields\": [\"campo1\", ...]} con 3 a 8 nombres de columna en snake_case, "
+                    "en el idioma del objetivo, ordenados lógicamente."},
+                {"role": "user", "content": body.objective},
+            ], max_tokens=200, temperature=0.0)
+            from .core import extract_json
+            parsed = extract_json(raw) or {}
+            fields = [str(f) for f in parsed.get("fields", []) if str(f).strip()][:8]
+        except Exception as e:
+            print(f"[prompt/generate] schema LLM falló, uso genérico: {e}")
+        if not fields:
+            fields = ["nombre", "descripcion", "valor"]
+
+        schema_fields = "\n".join(f'    <field name="{f}"/>' for f in fields)
+        example_row = "\n".join(f"    <{f}>…</{f}>" for f in fields)
+        format_spec = IMPORT_FORMAT_SPEC.format(
+            profile=p.name, sheet=sheet,
+            schema_fields=schema_fields, example_row=example_row,
+        )
+
+        prompt = (
+            f"# TAREA PARA AGENTE EXTERNO\n\n"
+            f"## Objetivo\n{body.objective.strip()}\n\n"
+            f"## Instrucciones\n"
+            f"1. Investiga/recopila los datos necesarios para cumplir el objetivo.\n"
+            f"2. Sé exhaustivo pero preciso: solo datos verificables, no inventes.\n"
+            f"3. Devuelve TODOS los registros encontrados.\n\n"
+            f"## {format_spec}\n"
+        )
+        return {"prompt": prompt, "profile": p.name, "sheet": sheet, "fields": fields}
+
+    @app.post("/api/import")
+    async def import_data(body: ImportRequest):
+        """Importar la respuesta de un agente externo (bloque <brain-import>)."""
+        p = get_profile(body.profile)
+        try:
+            data = parse_brain_import(body.content)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if data is None:
+            raise HTTPException(400, "No se encontró un bloque <brain-import> en el contenido")
+        result = await do_import(p, data)
+        return {"profile": p.name, **result}
+
     @app.post("/api/upload")
     async def upload(file: UploadFile = File(...), profile: Optional[str] = Form(None)):
         p = get_profile(profile)
-        if not (file.filename or "").lower().endswith(".txt"):
-            raise HTTPException(400, "Solo se aceptan archivos .txt")
+        fname = (file.filename or "").lower()
+        if not (fname.endswith(".txt") or fname.endswith(".xml")):
+            raise HTTPException(400, "Solo se aceptan archivos .txt o .xml")
         raw = await file.read()
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError:
             content = raw.decode("latin-1", errors="replace")
+
+        # Si el archivo contiene un brain-import → importación estructurada
+        try:
+            data = parse_brain_import(content)
+        except ValueError as e:
+            raise HTTPException(400, f"El archivo contiene un brain-import inválido: {e}")
+        if data is not None:
+            result = await do_import(p, data)
+            return {"profile": p.name, "imported": True, **result}
 
         entry = p.register_document(file.filename, content)
 

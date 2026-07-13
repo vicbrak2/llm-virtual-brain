@@ -12,8 +12,38 @@
 function doPost(e) {
   var action = (e.parameter.action || "");
   if (action === "registerDocument") return registerDocument(e);
+  if (action === "appendRows") return appendRows(e);
   return ContentService.createTextOutput(
     JSON.stringify({ ok: false, error: "acción desconocida: " + action })
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Filas estructuradas provenientes de un <brain-import> (agente externo).
+ * Params: sheet, profile, headers (JSON array), rows (JSON array de arrays).
+ * Crea la hoja con encabezados si no existe y agrega las filas al final.
+ */
+function appendRows(e) {
+  var p = e.parameter;
+  var headers = JSON.parse(p.headers || "[]");
+  var rows = JSON.parse(p.rows || "[]");
+  var ss = getOrCreateSpreadsheet_("Brain DB");
+  var sheetName = p.sheet || "Datos";
+  var sh = ss.getSheetByName(sheetName);
+  if (!sh) {
+    sh = ss.insertSheet(sheetName);
+    sh.appendRow(headers);
+    sh.setFrozenRows(1);
+  }
+  if (rows.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length)
+      .setValues(rows.map(function (r) {
+        while (r.length < headers.length) r.push("");
+        return r.slice(0, headers.length);
+      }));
+  }
+  return ContentService.createTextOutput(
+    JSON.stringify({ ok: true, sheet: sheetName, appended: rows.length, lastRow: sh.getLastRow() })
   ).setMimeType(ContentService.MimeType.JSON);
 }
 
