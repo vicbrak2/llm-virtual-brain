@@ -293,7 +293,9 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
     @app.get("/", include_in_schema=False)
     async def ui_root():
         if ui_file:
-            return FileResponse(ui_file, media_type="text/html")
+            # no-store: el navegador siempre pide la UI fresca (evita ver versiones viejas)
+            return FileResponse(ui_file, media_type="text/html",
+                                headers={"Cache-Control": "no-store, must-revalidate"})
         return HTMLResponse(
             "<h1>Brain Server</h1><p>API en /api/*. UI no encontrada "
             "(coloca ui/brain-chat.html o define BRAIN_UI).</p>"
