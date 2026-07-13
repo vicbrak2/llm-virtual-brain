@@ -58,6 +58,38 @@ REGLAS DEL FORMATO:
 5. Escapa los caracteres especiales XML: & → &amp;  < → &lt;  > → &gt;"""
 
 
+# ── Creación de sub-agentes desde el chat (perfil "creador") ────────────────
+# Cuando el creador confirma un agente, su respuesta incluye un bloque
+# <brain-agent>; el server lo materializa: YAML + perfil vivo + registro en Sheets.
+def parse_brain_agent(content: str) -> Optional[Dict]:
+    """Extraer el primer bloque <brain-agent> (spec de un sub-agente)."""
+    match = re.search(r"<brain-agent\b.*?</brain-agent>", content, re.DOTALL)
+    if not match:
+        return None
+    try:
+        root = ET.fromstring(match.group(0))
+    except ET.ParseError as e:
+        raise ValueError(f"XML de brain-agent inválido: {e}")
+    def txt(tag):
+        el = root.find(tag)
+        return (el.text or "").strip() if el is not None else ""
+    spec = {
+        "nombre": txt("nombre"),
+        "descripcion": txt("descripcion"),
+        "prompt": txt("prompt"),
+    }
+    if not spec["nombre"] or not spec["prompt"]:
+        raise ValueError("brain-agent requiere <nombre> y <prompt>")
+    return spec
+
+
+def slugify(name: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
+    return s or "agente"
+
+
 def parse_brain_import(content: str) -> Optional[Dict]:
     """Extraer y parsear el primer bloque <brain-import> de un texto.
     Devuelve {profile, sheet, headers, rows} o None si no hay bloque."""
@@ -126,6 +158,8 @@ class ProfileRuntime:
         with open(yaml_path, encoding="utf-8") as f:
             raw = _yaml.safe_load(f) or {}
         self.description = raw.pop("description", "")
+        self.creator = bool(raw.pop("creator", False))  # perfil meta: crea sub-agentes
+        self.active = True                              # toggle activo/inactivo
         self.storage = _substitute_env_vars(raw.pop("storage", {}) or {})
         # Si la env var no existe, queda el placeholder ${...} → tratar como no configurado
         if "${" in str(self.storage.get("gas_url", "")):
@@ -214,6 +248,24 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
 
     state = {"active": next(iter(profiles))}
 
+    # Toggles activo/inactivo persistidos entre reinicios
+    state_file = data_path / "agents_state.json"
+    if state_file.exists():
+        try:
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+            for pname, on in saved.get("active", {}).items():
+                if pname in profiles:
+                    profiles[pname].active = bool(on)
+        except Exception:
+            pass
+
+    def save_state():
+        state_file.write_text(
+            json.dumps({"active": {n: p.active for n, p in profiles.items()}},
+                       ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+
     app = FastAPI(title="Brain Server", version="1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -258,11 +310,14 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             "profiles": [
                 {
                     "name": p.name,
+                    "tag": p.name,  # el tag de invocación externa ES el nombre del perfil
                     "app_name": p.brain.app_name,
                     "description": p.description,
                     "providers": [pr.name for pr in p.brain.providers],
                     "documents": len(p.documents()),
                     "sheets": bool(p.storage.get("gas_url")),
+                    "active": p.active,
+                    "creator": p.creator,
                 }
                 for p in profiles.values()
             ],
@@ -274,6 +329,18 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             raise HTTPException(404, f"Perfil desconocido: {body.name}")
         state["active"] = body.name
         return {"active": state["active"]}
+
+    @app.post("/api/profile/toggle")
+    async def toggle(body: ActivateRequest):
+        """Activar/desactivar un sub-agente (los inactivos rechazan peticiones)."""
+        if body.name not in profiles:
+            raise HTTPException(404, f"Perfil desconocido: {body.name}")
+        p = profiles[body.name]
+        if p.creator and p.active:
+            raise HTTPException(400, "El perfil creador no se puede desactivar")
+        p.active = not p.active
+        save_state()
+        return {"name": p.name, "active": p.active}
 
     @app.get("/api/status")
     async def status():
@@ -288,6 +355,8 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
     @app.post("/api/chat")
     async def chat(body: ChatRequest):
         p = get_profile(body.profile)
+        if not p.active:
+            raise HTTPException(409, f"El agente '{p.name}' está desactivado (usa /api/profile/toggle)")
 
         # Prompt de sistema: etapa "chat" del perfil (o genérico)
         system = ""
@@ -319,7 +388,28 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             raise HTTPException(502, f"Todos los proveedores fallaron: {str(e)[:200]}")
 
         st = p.brain.status()
-        return {"reply": reply, "provider": st["active"], "profile": p.name}
+        result = {"reply": reply, "provider": st["active"], "profile": p.name}
+
+        # Perfil creador: si la respuesta confirma un agente (<brain-agent>), materializarlo
+        if p.creator:
+            try:
+                spec = parse_brain_agent(reply)
+            except ValueError as e:
+                spec = None
+                result["agent_error"] = str(e)
+            if spec:
+                created = await materialize_agent(p, spec)
+                result["agent_created"] = created
+                result["reply"] = (
+                    f"✅ Agente creado y desplegado.\n\n"
+                    f"• Tag/ID: {created['tag']}\n"
+                    f"• Nombre: {created['name']}\n"
+                    f"• Ficha en Sheets: {'pestaña AGENTE ' + created['tag'] + ' ✓' if created['sheets'] == 'ok' else created['sheets']}\n"
+                    f"• Hoja de datos propia: DB {created['tag']}\n\n"
+                    f"Ya aparece en la barra lateral: seleccionalo para probarlo, "
+                    f"o invocalo desde cualquier UI externa con profile='{created['tag']}'."
+                )
+        return result
 
     async def push_rows_to_sheets(p: ProfileRuntime, sheet: str, headers: List[str], rows: List[List[str]]) -> str:
         """Registrar filas estructuradas en Google Sheets vía GAS (action=appendRows)."""
@@ -339,6 +429,46 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             return "ok"
         except Exception as e:
             return f"error: {str(e)[:120]}"
+
+    async def materialize_agent(creator: ProfileRuntime, spec: Dict) -> Dict:
+        """Crear un sub-agente real: YAML + perfil vivo + pestaña legible en Sheets."""
+        import yaml as _yaml
+        tag = slugify(spec["nombre"])
+        if tag in profiles:
+            tag = f"{tag}_{int(time.time()) % 10000}"
+        yaml_path = profiles_path / f"{tag}.yaml"
+        cfg = {
+            "description": spec["descripcion"] or spec["nombre"],
+            "app_name": f"brain_{tag}",
+            "providers": [
+                {"name": "cerebras", "api_key": "${CEREBRAS_API_KEY}"},
+                {"name": "groq", "api_key": "${GROQ_API_KEY}"},
+                {"name": "openrouter", "api_key": "${OPENROUTER_API_KEY}"},
+                {"name": "hf", "api_key": "${HF_TOKEN}"},
+            ],
+            "prompts": {"type": "dict", "config": {"prompts": {"chat": spec["prompt"]}}},
+            "storage": {"gas_url": "${BRAIN_GAS_URL}", "sheet": f"DB {tag}"},
+            "timeout_seconds": 30,
+        }
+        yaml_path.write_text(
+            _yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+        profiles[tag] = ProfileRuntime(tag, yaml_path, data_path)
+        save_state()
+        # Ficha humano-legible del agente en su propia pestaña del Sheet
+        sheets_status = await push_rows_to_sheets(
+            creator, f"AGENTE {tag}", ["Campo", "Valor"],
+            [
+                ["Tag/ID", tag],
+                ["Nombre", spec["nombre"]],
+                ["Descripción", spec["descripcion"]],
+                ["Creado", time.strftime("%Y-%m-%d %H:%M:%S")],
+                ["Hoja de datos", f"DB {tag}"],
+                ["Invocación", f"POST /api/chat con profile='{tag}'"],
+                ["Prompt / Directrices", spec["prompt"]],
+            ],
+        )
+        return {"tag": tag, "name": spec["nombre"], "sheets": sheets_status}
 
     async def do_import(p: ProfileRuntime, data: Dict) -> Dict:
         """Persistir un brain-import: tabla local + doc de contexto + Sheets."""
