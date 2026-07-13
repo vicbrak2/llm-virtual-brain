@@ -24,9 +24,9 @@ prompts:
         Si hay documentos en la BASE DE CONOCIMIENTO, apóyate en ellos y cítalos por nombre.
         Si no sabes algo, dilo. Responde en el idioma del usuario.
 
-# Opcional: registrar los TXT subidos en Google Sheets vía GAS.
-# storage:
-#   gas_url: "${BRAIN_GAS_URL}"
-#   sheet: "Documentos"
+# Registro de TXT subidos en Google Sheets vía GAS (URL por env BRAIN_GAS_URL).
+storage:
+  gas_url: "${BRAIN_GAS_URL}"
+  sheet: "Documentos"
 
 timeout_seconds: 30

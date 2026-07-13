@@ -20,8 +20,8 @@ prompts:
         Responde SIEMPRE con el precio y condiciones exactas que aparecen en los documentos.
         Si el servicio no está en los documentos, dilo claramente — no inventes precios.
 
-# storage:
-#   gas_url: "${BRAIN_GAS_URL}"
-#   sheet: "Precios"
+storage:
+  gas_url: "${BRAIN_GAS_URL}"
+  sheet: "Precios"
 
 timeout_seconds: 30

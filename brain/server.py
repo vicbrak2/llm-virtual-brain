@@ -29,7 +29,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .config import load_config_from_yaml
+from .config import load_config_from_yaml, _substitute_env_vars
 from .core import Brain
 
 MAX_DOC_CHARS = 60_000          # límite por documento subido
@@ -126,7 +126,10 @@ class ProfileRuntime:
         with open(yaml_path, encoding="utf-8") as f:
             raw = _yaml.safe_load(f) or {}
         self.description = raw.pop("description", "")
-        self.storage = raw.pop("storage", {}) or {}
+        self.storage = _substitute_env_vars(raw.pop("storage", {}) or {})
+        # Si la env var no existe, queda el placeholder ${...} → tratar como no configurado
+        if "${" in str(self.storage.get("gas_url", "")):
+            self.storage["gas_url"] = ""
         # El resto del YAML es un BrainConfig estándar
         self.brain = Brain(load_config_from_yaml(str(yaml_path)))
         self.docs_dir = data_dir / "uploads" / name
