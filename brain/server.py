@@ -344,6 +344,33 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         save_state()
         return {"name": p.name, "active": p.active}
 
+    @app.post("/api/profile/delete")
+    async def delete_profile(body: ActivateRequest):
+        """Eliminar un agente: se quita del sistema y su YAML se archiva en
+        profiles/_archived/ (sus documentos y tablas NO se borran, por seguridad)."""
+        if body.name not in profiles:
+            raise HTTPException(404, f"Perfil desconocido: {body.name}")
+        p = profiles[body.name]
+        if p.creator:
+            raise HTTPException(400, "El perfil creador no se puede eliminar")
+        if len(profiles) <= 1:
+            raise HTTPException(400, "No se puede eliminar el único perfil")
+        # Archivar el YAML (recuperable manualmente moviéndolo de vuelta)
+        archived_dir = profiles_path / "_archived"
+        archived_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            target = archived_dir / f"{int(time.time())}_{p.yaml_path.name}"
+            p.yaml_path.replace(target)
+            archived_as = str(target)
+        except Exception as e:
+            archived_as = f"no se pudo archivar el YAML: {e}"
+        del profiles[body.name]
+        if state["active"] == body.name:
+            state["active"] = next(iter(profiles))
+        save_state()
+        return {"deleted": body.name, "archived_yaml": archived_as,
+                "data_kept": True, "active": state["active"]}
+
     @app.get("/api/status")
     async def status():
         p = profiles[state["active"]]

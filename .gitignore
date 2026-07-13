@@ -141,3 +141,5 @@ logs/
 
 data_test/
 server_test.log
+
+profiles/_archived/
