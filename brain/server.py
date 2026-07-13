@@ -137,6 +137,14 @@ class ActivateRequest(BaseModel):
     name: str
 
 
+class UpdateProfileRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    prompt: Optional[str] = None       # etapa "chat" del agente
+    links: Optional[List[str]] = None  # perfiles cuyo contexto se comparte con este
+    connectors: Optional[List[Dict]] = None  # conexiones API futuras del agente
+
+
 class GeneratePromptRequest(BaseModel):
     objective: str                 # qué datos debe producir el agente externo
     profile: Optional[str] = None
@@ -266,6 +274,36 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             encoding="utf-8",
         )
 
+    # Metadatos por perfil: links (contextos compartidos) y connectors (APIs futuras)
+    meta_file = data_path / "profiles_meta.json"
+    meta: Dict[str, Dict] = {}
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+
+    def save_meta():
+        meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def profile_meta(name: str) -> Dict:
+        return meta.setdefault(name, {"links": [], "connectors": []})
+
+    def merged_docs_context(p: "ProfileRuntime") -> str:
+        """Contexto del perfil + contextos compartidos (perfiles linkeados)."""
+        parts = []
+        own = p.docs_context()
+        if own:
+            parts.append(own)
+        for linked_name in profile_meta(p.name).get("links", []):
+            lp = profiles.get(linked_name)
+            if lp is None:
+                continue
+            ctx = lp.docs_context()
+            if ctx:
+                parts.append(f"── CONTEXTO COMPARTIDO (desde '{linked_name}') ──\n{ctx}")
+        return "\n\n".join(parts)
+
     app = FastAPI(title="Brain Server", version="1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -320,6 +358,8 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                     "sheets": bool(p.storage.get("gas_url")),
                     "active": p.active,
                     "creator": p.creator,
+                    "links": profile_meta(p.name).get("links", []),
+                    "connectors": len(profile_meta(p.name).get("connectors", [])),
                 }
                 for p in profiles.values()
             ],
@@ -365,11 +405,105 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         except Exception as e:
             archived_as = f"no se pudo archivar el YAML: {e}"
         del profiles[body.name]
+        meta.pop(body.name, None)
+        # Quitar links rotos que apuntaban al eliminado
+        for m in meta.values():
+            if body.name in m.get("links", []):
+                m["links"].remove(body.name)
         if state["active"] == body.name:
             state["active"] = next(iter(profiles))
         save_state()
+        save_meta()
+        # Marca de auditoría en el índice del Sheet
+        any_gas = next((pp for pp in profiles.values() if pp.storage.get("gas_url")), None)
+        if any_gas:
+            await push_rows_to_sheets(any_gas, "Agentes",
+                ["Fecha", "Tag", "Nombre", "Descripción", "Estado"],
+                [[time.strftime("%Y-%m-%d %H:%M:%S"), body.name, "", "", "ELIMINADO"]])
         return {"deleted": body.name, "archived_yaml": archived_as,
                 "data_kept": True, "active": state["active"]}
+
+    @app.get("/api/profile/info")
+    async def profile_info(name: str):
+        """Detalle editable de un perfil: descripción, prompt, links y connectors."""
+        if name not in profiles:
+            raise HTTPException(404, f"Perfil desconocido: {name}")
+        p = profiles[name]
+        prompt = p.brain.prompt_loader.get("chat") if p.brain.prompt_loader else ""
+        m = profile_meta(name)
+        return {
+            "name": p.name,
+            "description": p.description,
+            "prompt": prompt,
+            "links": m.get("links", []),
+            "connectors": m.get("connectors", []),
+            "available_links": [n for n in profiles if n != name and not profiles[n].creator],
+            "creator": p.creator,
+        }
+
+    @app.post("/api/profile/update")
+    async def profile_update(body: UpdateProfileRequest):
+        """Editar un agente: descripción y/o prompt (persisten en su YAML),
+        links de contexto compartido y connectors (persisten en profiles_meta.json)."""
+        if body.name not in profiles:
+            raise HTTPException(404, f"Perfil desconocido: {body.name}")
+        p = profiles[body.name]
+        changed_yaml = False
+
+        if body.description is not None or body.prompt is not None:
+            import yaml as _yaml
+            with open(p.yaml_path, encoding="utf-8") as f:
+                raw = _yaml.safe_load(f) or {}
+            if body.description is not None:
+                raw["description"] = body.description
+                changed_yaml = True
+            if body.prompt is not None:
+                raw.setdefault("prompts", {"type": "dict", "config": {"prompts": {}}})
+                raw["prompts"].setdefault("config", {}).setdefault("prompts", {})["chat"] = body.prompt
+                raw["prompts"]["type"] = "dict"
+                changed_yaml = True
+            if changed_yaml:
+                p.yaml_path.write_text(
+                    _yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+                was_active = p.active
+                profiles[body.name] = ProfileRuntime(body.name, p.yaml_path, data_path)
+                profiles[body.name].active = was_active
+                p = profiles[body.name]
+
+        m = profile_meta(body.name)
+        if body.links is not None:
+            valid = [l for l in body.links if l in profiles and l != body.name]
+            m["links"] = valid
+        if body.connectors is not None:
+            m["connectors"] = body.connectors
+        save_meta()
+
+        # Auditoría en la ficha del Sheet
+        if changed_yaml and p.storage.get("gas_url"):
+            rows = [["Actualizado", time.strftime("%Y-%m-%d %H:%M:%S")]]
+            if body.description is not None:
+                rows.append(["Descripción (nueva)", body.description])
+            if body.prompt is not None:
+                rows.append(["Prompt / Directrices (nuevo)", body.prompt])
+            await push_rows_to_sheets(p, f"AGENTE {p.name}", ["Campo", "Valor"], rows)
+
+        return {
+            "name": p.name, "description": p.description,
+            "links": m["links"], "connectors": m["connectors"],
+            "yaml_updated": changed_yaml,
+        }
+
+    @app.get("/api/document")
+    async def document_content(profile: str, stored_as: str):
+        """Contenido de un documento subido (para el visor de la UI)."""
+        p = get_profile(profile)
+        if "/" in stored_as or "\\" in stored_as or ".." in stored_as:
+            raise HTTPException(400, "stored_as inválido")
+        path = p.docs_dir / stored_as
+        if not path.is_file():
+            raise HTTPException(404, "Documento no encontrado")
+        return {"stored_as": stored_as,
+                "content": path.read_text(encoding="utf-8", errors="replace")[:MAX_DOC_CHARS]}
 
     @app.get("/api/status")
     async def status():
@@ -397,12 +531,21 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                 "de forma clara y accionable, apoyándote en los documentos del contexto cuando existan."
             )
 
-        docs = p.docs_context()
+        docs = merged_docs_context(p)
         messages = [{"role": "system", "content": system}]
         if docs:
             messages.append({
                 "role": "system",
                 "content": f"BASE DE CONOCIMIENTO (documentos subidos por el usuario):\n\n{docs}",
+            })
+        connectors = profile_meta(p.name).get("connectors", [])
+        if connectors:
+            conn_desc = ", ".join(f"{c.get('name', '?')} ({c.get('type', 'api')})" for c in connectors)
+            messages.append({
+                "role": "system",
+                "content": f"CONECTORES CONFIGURADOS (aún no ejecutables en tiempo real; si el "
+                           f"usuario pide datos que dependen de ellos, indica que la conexión está "
+                           f"configurada pero pendiente de activación): {conn_desc}",
             })
         for h in body.history[-8:]:
             if h.get("role") in ("user", "assistant") and h.get("content"):
@@ -496,6 +639,12 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                 ["Invocación", f"POST /api/chat con profile='{tag}'"],
                 ["Prompt / Directrices", spec["prompt"]],
             ],
+        )
+        # Índice de agentes (una fila por alta)
+        await push_rows_to_sheets(
+            creator, "Agentes", ["Fecha", "Tag", "Nombre", "Descripción", "Estado"],
+            [[time.strftime("%Y-%m-%d %H:%M:%S"), tag, spec["nombre"],
+              spec["descripcion"], "ACTIVO"]],
         )
         return {"tag": tag, "name": spec["nombre"], "sheets": sheets_status}
 
