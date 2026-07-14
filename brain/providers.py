@@ -82,11 +82,13 @@ KNOWN_PROVIDERS: Dict[str, Dict] = {
     },
     "groq": {
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        "model": "llama-3.3-70b-versatile",
+        # llama-3.3-70b-versatile fue deprecado por Groq; gpt-oss-120b es el reemplazo recomendado
+        "model": "openai/gpt-oss-120b",
     },
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "model": "gemini-2.0-flash",
+        # gemini-2.0-flash fue apagado (jun 2026); 3.5-flash es el estable del free tier
+        "model": "gemini-3.5-flash",
     },
     "openrouter": {
         "url": "https://openrouter.ai/api/v1/chat/completions",

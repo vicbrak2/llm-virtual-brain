@@ -22,7 +22,7 @@ A Python library that abstracts multi-LLM orchestration, context enrichment, and
 
 | Feature | Benefit |
 |---|---|
-| **Multi-Provider** | Cerebras → Groq → Gemini → Mistral → OpenRouter → HF (fallback chain) |
+| **Multi-Provider** | Gemini → Groq → Cerebras → Mistral → OpenRouter → HF (quality-first fallback chain) |
 | **Dynamic Rotation** | If provider fails, auto-switch (no re-prompting) |
 | **Key-Aware Chain** | Providers without API key are auto-skipped (chain uses whatever keys you have) |
 | **Sticky State** | Remembers which provider responded last → avoids dead providers |
@@ -60,6 +60,7 @@ Invoke-RestMethod http://localhost:8901/api/status   # ver la cadena activa
 ```
 
 Abre **http://localhost:8901**. Guía completa: [docs/DOCKER.md](docs/DOCKER.md).
+Cómo obtener cada API key: [docs/API_KEYS.md](docs/API_KEYS.md).
 
 ## 🚀 Quick Start
 

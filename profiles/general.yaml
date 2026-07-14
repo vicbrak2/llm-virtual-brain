@@ -2,19 +2,25 @@
 description: "Asistente general — pregunta lo que quieras; usa tus TXT subidos como base de conocimiento"
 app_name: "brain_general"
 
-# Cadena orquestada completa: se usan en orden y se rota al siguiente si uno falla.
-# Los providers sin API key en el entorno se omiten automáticamente de la cadena.
+# Cadena orquestada CALIDAD-PRIMERO: se usan en orden y se rota al siguiente si
+# uno falla. Los providers sin API key en el entorno se omiten automáticamente.
 providers:
-  - name: "cerebras"
-    api_key: "${CEREBRAS_API_KEY}"
-  - name: "groq"
-    api_key: "${GROQ_API_KEY}"
   - name: "gemini"
     api_key: "${GEMINI_API_KEY}"
+    model: "gemini-3.5-flash"
+  - name: "groq"
+    api_key: "${GROQ_API_KEY}"
+    model: "moonshotai/kimi-k2-instruct-0905"
+  - name: "cerebras"
+    api_key: "${CEREBRAS_API_KEY}"
+    extra_body:
+      reasoning_effort: "high"
   - name: "mistral"
     api_key: "${MISTRAL_API_KEY}"
+    model: "mistral-large-latest"
   - name: "openrouter"
     api_key: "${OPENROUTER_API_KEY}"
+    model: "meta-llama/llama-3.3-70b-instruct:free"
     extra_headers:
       HTTP-Referer: "https://brain.local"
       X-Title: "Brain Chat"

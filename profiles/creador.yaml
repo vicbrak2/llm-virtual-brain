@@ -4,16 +4,22 @@ creator: true
 app_name: "brain_creador"
 
 providers:
-  - name: "cerebras"
-    api_key: "${CEREBRAS_API_KEY}"
-  - name: "groq"
-    api_key: "${GROQ_API_KEY}"
   - name: "gemini"
     api_key: "${GEMINI_API_KEY}"
+    model: "gemini-3.5-flash"
+  - name: "groq"
+    api_key: "${GROQ_API_KEY}"
+    model: "moonshotai/kimi-k2-instruct-0905"
+  - name: "cerebras"
+    api_key: "${CEREBRAS_API_KEY}"
+    extra_body:
+      reasoning_effort: "high"
   - name: "mistral"
     api_key: "${MISTRAL_API_KEY}"
+    model: "mistral-large-latest"
   - name: "openrouter"
     api_key: "${OPENROUTER_API_KEY}"
+    model: "meta-llama/llama-3.3-70b-instruct:free"
   - name: "hf"
     api_key: "${HF_TOKEN}"
 

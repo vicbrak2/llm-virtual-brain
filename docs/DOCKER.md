@@ -1,9 +1,10 @@
 # 🐳 Brain en Docker — orquestación multi-LLM
 
 Levanta el Brain Server (chat UI + API) en un contenedor, con **todos los
-providers LLM orquestados en cadena**: Cerebras → Groq → Gemini → Mistral →
-OpenRouter → HuggingFace. Si un provider falla o no tiene API key, Brain rota
-automáticamente al siguiente sin perder el contexto de la conversación.
+providers LLM orquestados en cadena calidad-primero**: Gemini → Groq (Kimi K2)
+→ Cerebras → Mistral Large → OpenRouter → HuggingFace. Si un provider falla o
+no tiene API key, Brain rota automáticamente al siguiente sin perder el
+contexto de la conversación.
 
 > Solo necesitas **una** API key para empezar (Groq es gratis y rápida).
 > Las que no configures se omiten de la cadena automáticamente.
@@ -29,14 +30,14 @@ HF_TOKEN=hf_...
 BRAIN_GAS_URL=
 ```
 
-Dónde obtener cada key:
+Dónde obtener cada key (guía paso a paso: [API_KEYS.md](API_KEYS.md)):
 
 | Provider | URL | Free tier |
 |---|---|---|
+| Gemini | https://aistudio.google.com/apikey | ✅ |
 | Groq | https://console.groq.com/keys | ✅ |
 | Cerebras | https://cloud.cerebras.ai | ✅ |
-| Gemini | https://aistudio.google.com/apikey | ✅ |
-| Mistral | https://console.mistral.ai/api-keys | ✅ |
+| Mistral | https://console.mistral.ai/api-keys | ✅ (plan "Experiment") |
 | OpenRouter | https://openrouter.ai/keys | ✅ (modelos :free) |
 | HuggingFace | https://huggingface.co/settings/tokens | ✅ |
 
@@ -65,15 +66,15 @@ Invoke-RestMethod http://localhost:8901/api/status
 ```json
 {
   "active_profile": "creador",
-  "active": "groq",
+  "active": "gemini",
   "count": 2,
   "providers": [
-    {"order": 0, "name": "groq", "model": "llama-3.3-70b-versatile", "configured": true},
-    {"order": 1, "name": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free", "configured": true}
+    {"order": 0, "name": "gemini", "model": "gemini-3.5-flash", "configured": true},
+    {"order": 1, "name": "groq", "model": "moonshotai/kimi-k2-instruct-0905", "configured": true}
   ],
   "skipped": [
     {"name": "cerebras", "model": "gpt-oss-120b", "reason": "sin API key"},
-    {"name": "gemini", "model": "gemini-2.0-flash", "reason": "sin API key"}
+    {"name": "mistral", "model": "mistral-large-latest", "reason": "sin API key"}
   ]
 }
 ```
