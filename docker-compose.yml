@@ -1,0 +1,19 @@
+services:
+  brain:
+    build: .
+    container_name: brain
+    ports:
+      - "8901:8901"
+    env_file:
+      - .env
+    volumes:
+      # Perfiles: los sub-agentes creados desde la UI quedan persistidos aquí
+      - ./profiles:/app/profiles
+      # Datos: uploads TXT, registros y estado de perfiles
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8901/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

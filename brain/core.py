@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Union
 import httpx
 
 from .errors import BrainError
-from .providers import Provider, provider_from_dict
+from .providers import KNOWN_PROVIDERS, Provider, provider_from_dict
 from .context import ContextProvider, context_from_dict
 from .prompts import PromptLoader, loader_from_dict
 
@@ -21,6 +21,21 @@ class Message:
 
     def to_dict(self) -> Dict:
         return {"role": self.role, "content": self.content}
+
+
+def provider_configured(provider: Provider) -> bool:
+    """¿Tiene el provider una API key usable?
+
+    - Key con placeholder ${VAR} sin sustituir → la env var no existe → NO configurado.
+    - Key vacía en un provider conocido (todos requieren key) → NO configurado.
+    - Key vacía en un provider custom (p. ej. servidor local) → se acepta.
+    """
+    key = (provider.api_key or "").strip()
+    if "${" in key:
+        return False
+    if not key and provider.name in KNOWN_PROVIDERS:
+        return False
+    return True
 
 
 class Brain:
@@ -63,18 +78,26 @@ class Brain:
             timeout_seconds = getattr(config, "timeout_seconds", timeout_seconds)
             app_name = getattr(config, "app_name", app_name)
 
-        self.providers = providers or []
+        # Orquestación: solo entran a la cadena los providers con API key usable.
+        # Los demás quedan registrados como "skipped" (visibles en status()) para
+        # que la cadena no gaste llamadas en providers sin credenciales.
+        self.all_providers = providers or []
+        self.providers = [p for p in self.all_providers if provider_configured(p)]
+        self.skipped_providers = [p for p in self.all_providers if not provider_configured(p)]
         self.context_provider = context_provider
         self.prompt_loader = prompt_loader
         self.timeout_seconds = timeout_seconds
         self.app_name = app_name
 
-        # Estado sticky (rotación dinámica)
+        # Estado sticky (rotación dinámica) — índice sobre self.providers (configurados)
         self._active_idx = 0
         self._last_used: Optional[str] = None
 
-        if not self.providers:
+        if not self.all_providers:
             raise BrainError("Se requiere al menos un provider")
+        if self.skipped_providers:
+            names = ", ".join(p.name for p in self.skipped_providers)
+            print(f"[brain:{app_name}] providers sin API key (omitidos de la cadena): {names}")
 
     # ── API de bajo nivel: mensajes ya construidos ─────────────────────────
     async def complete(
@@ -152,6 +175,14 @@ class Brain:
         temperature: float,
     ) -> str:
         """Cadena con rotación dinámica y sticky index."""
+        if not self.providers:
+            faltantes = ", ".join(p.name for p in self.skipped_providers) or "ninguno definido"
+            raise BrainError(
+                "Ningún provider tiene API key configurada "
+                f"(providers sin key: {faltantes}). Define las variables de entorno "
+                "(CEREBRAS_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY, "
+                "OPENROUTER_API_KEY, HF_TOKEN) o edita el YAML del perfil."
+            )
         n = len(self.providers)
         errors = []
 
@@ -211,7 +242,7 @@ class Brain:
         return messages
 
     def status(self) -> Dict:
-        """Estado actual: provider activo, cadena configurada."""
+        """Estado actual: provider activo, cadena configurada y omitidos."""
         active = self._last_used or (self.providers[self._active_idx].name if self.providers else None)
         return {
             "app": self.app_name,
@@ -219,8 +250,12 @@ class Brain:
             "active": active,
             "count": len(self.providers),
             "providers": [
-                {"order": i, "name": p.name, "model": p.model}
+                {"order": i, "name": p.name, "model": p.model, "configured": True}
                 for i, p in enumerate(self.providers)
+            ],
+            "skipped": [
+                {"name": p.name, "model": p.model, "reason": "sin API key"}
+                for p in self.skipped_providers
             ],
         }
 

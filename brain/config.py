@@ -140,7 +140,8 @@ def get_profile_providers(profile: BrainProfile) -> List[Dict]:
         BrainProfile.SMART: [{"name": "cerebras"}, {"name": "groq"}],
         BrainProfile.CHEAP: [{"name": "openrouter"}, {"name": "hf"}],
         BrainProfile.RESILIENT: [
-            {"name": "cerebras"}, {"name": "groq"}, {"name": "openrouter"}, {"name": "hf"}
+            {"name": "cerebras"}, {"name": "groq"}, {"name": "gemini"},
+            {"name": "mistral"}, {"name": "openrouter"}, {"name": "hf"}
         ],
     }
     return profiles.get(profile, [])

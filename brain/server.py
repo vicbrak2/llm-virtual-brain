@@ -615,6 +615,8 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             "providers": [
                 {"name": "cerebras", "api_key": "${CEREBRAS_API_KEY}"},
                 {"name": "groq", "api_key": "${GROQ_API_KEY}"},
+                {"name": "gemini", "api_key": "${GEMINI_API_KEY}"},
+                {"name": "mistral", "api_key": "${MISTRAL_API_KEY}"},
                 {"name": "openrouter", "api_key": "${OPENROUTER_API_KEY}"},
                 {"name": "hf", "api_key": "${HF_TOKEN}"},
             ],

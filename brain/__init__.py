@@ -8,7 +8,7 @@ Ejemplos de uso:
   - Knowledge Bot (RAG conversacional)
 """
 
-from .core import Brain, Message, extract_json
+from .core import Brain, Message, extract_json, provider_configured
 from .errors import BrainError, ProviderError, ContextError, PromptError, ConfigError
 from .config import (
     BrainConfig,
@@ -53,6 +53,7 @@ __all__ = [
     "Brain",
     "Message",
     "extract_json",
+    "provider_configured",
     "BrainError",
     "ProviderError",
     "ContextError",

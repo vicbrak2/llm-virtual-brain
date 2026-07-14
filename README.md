@@ -22,8 +22,9 @@ A Python library that abstracts multi-LLM orchestration, context enrichment, and
 
 | Feature | Benefit |
 |---|---|
-| **Multi-Provider** | Cerebras → Groq → OpenRouter → HF (fallback chain) |
+| **Multi-Provider** | Cerebras → Groq → Gemini → Mistral → OpenRouter → HF (fallback chain) |
 | **Dynamic Rotation** | If provider fails, auto-switch (no re-prompting) |
+| **Key-Aware Chain** | Providers without API key are auto-skipped (chain uses whatever keys you have) |
 | **Sticky State** | Remembers which provider responded last → avoids dead providers |
 | **Modular** | Same Brain code, different apps (change config only) |
 | **Context Pluggable** | Google Sheets, SQLite, Password Vault, JSON, custom |
@@ -47,6 +48,18 @@ python -m brain.server --profiles ./profiles --port 8080
   si el perfil define `storage.gas_url`, se registra en Google Sheets (ver `docs/GAS_SNIPPET.gs`).
 - **Contexto**: el chat inyecta automáticamente los documentos del perfil activo.
 - API: `GET /api/profiles`, `POST /api/profile/activate`, `POST /api/chat`, `POST /api/upload`, `GET /api/documents`, `GET /api/status`.
+
+## 🐳 Docker (recomendado)
+
+Levanta el Brain Server con todos los LLM orquestados en el puerto **8901**:
+
+```powershell
+Copy-Item .env.example .env   # completa tus API keys (con una alcanza)
+docker compose up -d --build
+Invoke-RestMethod http://localhost:8901/api/status   # ver la cadena activa
+```
+
+Abre **http://localhost:8901**. Guía completa: [docs/DOCKER.md](docs/DOCKER.md).
 
 ## 🚀 Quick Start
 

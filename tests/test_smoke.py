@@ -59,6 +59,28 @@ def test_extract_json():
     assert extract_json("sin json") is None
 
 
+def test_providers_sin_key_se_omiten_de_la_cadena():
+    """Providers con key vacía o placeholder ${VAR} quedan fuera de la cadena."""
+    ps = [
+        provider_from_dict({"name": "groq", "api_key": "gsk_real"}),
+        provider_from_dict({"name": "cerebras", "api_key": "${CEREBRAS_API_KEY}"}),  # sin sustituir
+        provider_from_dict({"name": "hf", "api_key": ""}),  # vacía
+    ]
+    b = Brain(providers=ps)
+    assert [p.name for p in b.providers] == ["groq"]
+    assert sorted(p.name for p in b.skipped_providers) == ["cerebras", "hf"]
+    s = b.status()
+    assert s["count"] == 1
+    assert {e["name"] for e in s["skipped"]} == {"cerebras", "hf"}
+
+
+def test_provider_custom_sin_key_se_acepta():
+    """Un provider custom (p. ej. servidor local) puede no tener API key."""
+    p = provider_from_dict({"name": "ollama_local", "url": "http://localhost:11434/v1/chat/completions", "model": "llama3"})
+    b = Brain(providers=[p])
+    assert [x.name for x in b.providers] == ["ollama_local"]
+
+
 def test_env_substitution_with_default():
     os.environ["BRAIN_TEST_VAR"] = "valor"
     data = {"a": "${BRAIN_TEST_VAR}", "b": "${BRAIN_NO_EXISTE:defecto}", "c": "${BRAIN_NO_EXISTE_2}"}
