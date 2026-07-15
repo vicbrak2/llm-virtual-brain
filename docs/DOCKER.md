@@ -88,7 +88,7 @@ creación de sub-agentes.
 
 ```powershell
 docker compose logs -f brain      # ver logs (rotaciones de provider incluidas)
-docker compose restart brain      # reiniciar (recarga .env y perfiles)
+docker compose up -d brain        # aplicar cambios de .env (restart NO recarga env_file)
 docker compose down               # detener
 docker compose up -d --build      # reconstruir tras actualizar el código
 ```

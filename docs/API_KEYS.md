@@ -4,7 +4,7 @@ Todas son **gratis** (free tier, sin tarjeta de crédito salvo que se indique).
 Pega cada key en tu `.env` (copiado de `.env.example`) y reinicia el contenedor:
 
 ```powershell
-docker compose restart brain
+docker compose up -d brain  # (restart NO recarga el .env)
 Invoke-RestMethod http://localhost:8901/api/status   # verifica la cadena
 ```
 
@@ -75,7 +75,7 @@ si un provider falla o se queda sin cuota):
 Con las keys en `.env`:
 
 ```powershell
-docker compose restart brain
+docker compose up -d brain  # (restart NO recarga el .env)
 Invoke-RestMethod http://localhost:8901/api/status
 ```
 
