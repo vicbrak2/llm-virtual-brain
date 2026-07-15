@@ -259,7 +259,7 @@ profile: "cheap"
 providers:
   - name: "openrouter"
     api_key: "${OPENROUTER_API_KEY}"
-    model: "meta-llama/llama-3.3-70b-instruct:free"
+    model: "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 context:
   type: "gsheets"

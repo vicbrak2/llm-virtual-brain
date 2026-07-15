@@ -92,7 +92,7 @@ KNOWN_PROVIDERS: Dict[str, Dict] = {
     },
     "openrouter": {
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "model": "meta-llama/llama-3.3-70b-instruct:free",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
     },
     "mistral": {
         "url": "https://api.mistral.ai/v1/chat/completions",
@@ -155,6 +155,6 @@ def HuggingFaceProvider(api_key: str, model: str = "Qwen/Qwen2.5-72B-Instruct", 
 
 
 def OpenRouterProvider(
-    api_key: str, model: str = "meta-llama/llama-3.3-70b-instruct:free", **kwargs
+    api_key: str, model: str = "nvidia/nemotron-3-ultra-550b-a55b:free", **kwargs
 ) -> Provider:
     return provider_from_dict({"name": "openrouter", "api_key": api_key, "model": model, **kwargs})

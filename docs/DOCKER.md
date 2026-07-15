@@ -1,7 +1,7 @@
 # 🐳 Brain en Docker — orquestación multi-LLM
 
 Levanta el Brain Server (chat UI + API) en un contenedor, con **todos los
-providers LLM orquestados en cadena calidad-primero**: Gemini → Groq (Kimi K2)
+providers LLM orquestados en cadena calidad-primero**: Gemini → Groq (Llama 3.3 70B)
 → Cerebras → Mistral Large → OpenRouter → HuggingFace. Si un provider falla o
 no tiene API key, Brain rota automáticamente al siguiente sin perder el
 contexto de la conversación.
@@ -70,7 +70,7 @@ Invoke-RestMethod http://localhost:8901/api/status
   "count": 2,
   "providers": [
     {"order": 0, "name": "gemini", "model": "gemini-3.5-flash", "configured": true},
-    {"order": 1, "name": "groq", "model": "moonshotai/kimi-k2-instruct-0905", "configured": true}
+    {"order": 1, "name": "groq", "model": "llama-3.3-70b-versatile", "configured": true}
   ],
   "skipped": [
     {"name": "cerebras", "model": "gpt-oss-120b", "reason": "sin API key"},

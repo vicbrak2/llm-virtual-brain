@@ -14,10 +14,10 @@ si un provider falla o se queda sin cuota):
 | # | Provider | Modelo configurado | Rol en la cadena |
 |---|---|---|---|
 | 1 | Gemini | `gemini-3.5-flash` | Principal — generación 2026, gran calidad |
-| 2 | Groq | `moonshotai/kimi-k2-instruct-0905` | Open-weight top (Kimi K2, ~1T params MoE) |
+| 2 | Groq | `llama-3.3-70b-versatile` | Llama 3.3 70B a gran velocidad (LPU) |
 | 3 | Cerebras | `gpt-oss-120b` (reasoning high) | Razonamiento profundo |
 | 4 | Mistral | `mistral-large-latest` | Modelo grande, free tier generoso |
-| 5 | OpenRouter | `meta-llama/llama-3.3-70b-instruct:free` | Fallback gratuito |
+| 5 | OpenRouter | `nvidia/nemotron-3-ultra-550b-a55b:free` | Fallback gratuito |
 | 6 | HuggingFace | `Qwen/Qwen2.5-72B-Instruct` | Último recurso |
 
 ---
@@ -41,7 +41,7 @@ si un provider falla o se queda sin cuota):
    Se muestra **una sola vez** — guárdala ya.
 
 - Free tier: miles de requests/día según el modelo.
-- Aquí corre **Kimi K2** (uno de los mejores modelos abiertos) a gran velocidad.
+- Aquí corre **Llama 3.3 70B** a gran velocidad (hardware LPU).
 
 ## 3. Cerebras — `CEREBRAS_API_KEY`
 

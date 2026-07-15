@@ -7,7 +7,7 @@ providers:
   model: gemini-3.5-flash
 - name: groq
   api_key: ${GROQ_API_KEY}
-  model: moonshotai/kimi-k2-instruct-0905
+  model: llama-3.3-70b-versatile
 - name: cerebras
   api_key: ${CEREBRAS_API_KEY}
   extra_body:
@@ -17,7 +17,7 @@ providers:
   model: mistral-large-latest
 - name: openrouter
   api_key: ${OPENROUTER_API_KEY}
-  model: meta-llama/llama-3.3-70b-instruct:free
+  model: nvidia/nemotron-3-ultra-550b-a55b:free
 - name: hf
   api_key: ${HF_TOKEN}
 prompts:
