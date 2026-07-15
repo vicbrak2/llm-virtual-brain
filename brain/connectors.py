@@ -12,6 +12,9 @@ Soportados:
         Permisos: instagram_business_basic (+ instagram_business_manage_insights
         para alcance, guardados, vistas, demografía y horarios de audiencia —
         si el token no los tiene, esas secciones se omiten sin fallar).
+    meta_ads — Meta Marketing API (graph.facebook.com): campañas y resultados.
+        Credenciales vía env: META_ADS_ACCESS_TOKEN (Facebook Login, scope
+        ads_read) y META_AD_ACCOUNT_ID. Sin credenciales queda como pendiente.
 """
 
 import os
@@ -359,6 +362,96 @@ async def fetch_instagram_context() -> Optional[str]:
     return result
 
 
+FB_GRAPH = "https://graph.facebook.com/v23.0"
+
+
+async def _fb_get(client: httpx.AsyncClient, path: str, **params) -> Dict:
+    r = await client.get(f"{FB_GRAPH}/{path}", params=params)
+    r.raise_for_status()
+    return r.json()
+
+
+def _money(cents, currency: str) -> str:
+    """Presupuestos/gastos de Marketing API vienen en centavos de la moneda."""
+    try:
+        return f"{int(cents) / 100:,.0f} {currency}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "?"
+
+
+async def fetch_meta_ads_context() -> Optional[str]:
+    """Campañas de Meta Ads (Marketing API) con resultados de los últimos 28 días.
+
+    Credenciales vía env: META_ADS_ACCESS_TOKEN (token de Facebook Login con
+    `ads_read`) y META_AD_ACCOUNT_ID (con o sin prefijo act_).
+    """
+    token = os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
+    account = os.getenv("META_AD_ACCOUNT_ID", "").strip()
+    if not token or not account:
+        return None
+    if not account.startswith("act_"):
+        account = f"act_{account}"
+
+    cached = _cached("meta_ads")
+    if cached is not None:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            acct = await _fb_get(client, account,
+                                 fields="name,currency,account_status",
+                                 access_token=token)
+            currency = acct.get("currency", "")
+            camps = await _fb_get(client, f"{account}/campaigns",
+                                  fields="name,effective_status,objective,"
+                                         "daily_budget,lifetime_budget,"
+                                         "start_time,stop_time",
+                                  limit="25", access_token=token)
+            campaigns = camps.get("data", [])
+            ins = await _fb_get(client, f"{account}/insights",
+                                level="campaign", date_preset="last_28d",
+                                fields="campaign_id,campaign_name,spend,reach,"
+                                       "impressions,clicks,ctr,actions",
+                                access_token=token)
+            by_id = {i.get("campaign_id"): i for i in ins.get("data", [])}
+    except Exception as e:
+        print(f"[connectors] meta_ads fetch falló: {str(e)[:200]}")
+        _store("meta_ads", None)
+        return None
+
+    lines = [f"PUBLICIDAD META ADS — cuenta '{acct.get('name', account)}' (moneda {currency})"]
+    if not campaigns:
+        lines.append("Sin campañas creadas en la cuenta.")
+    active = [c for c in campaigns if c.get("effective_status") == "ACTIVE"]
+    rest = [c for c in campaigns if c.get("effective_status") != "ACTIVE"]
+    for title, group in (("CAMPAÑAS ACTIVAS (promociones vigentes)", active),
+                         ("OTRAS CAMPAÑAS (pausadas/terminadas)", rest[:10])):
+        if not group:
+            continue
+        lines.append(f"\n{title}:")
+        for c in group:
+            budget = ""
+            if c.get("daily_budget"):
+                budget = f" · presupuesto diario {_money(c['daily_budget'], currency)}"
+            elif c.get("lifetime_budget"):
+                budget = f" · presupuesto total {_money(c['lifetime_budget'], currency)}"
+            lines.append(f"- {c.get('name', '?')} [{c.get('effective_status', '?')}] · "
+                         f"objetivo {c.get('objective', '?')}{budget}")
+            i = by_id.get(c.get("id"))
+            if i:
+                acciones = ", ".join(
+                    f"{a.get('value')} {a.get('action_type', '').replace('_', ' ')}"
+                    for a in (i.get("actions") or [])[:4])
+                lines.append(f"  Últimos 28 días: gasto {_money(float(i.get('spend', 0)) * 100, currency)}, "
+                             f"alcance {i.get('reach', '?')}, {i.get('impressions', '?')} impresiones, "
+                             f"{i.get('clicks', '?')} clics (CTR {i.get('ctr', '?')}%)"
+                             + (f" · acciones: {acciones}" if acciones else ""))
+
+    result = "\n".join(lines)
+    _store("meta_ads", result)
+    return result
+
+
 async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
     """Ejecutar los conectores soportados de un perfil.
 
@@ -370,6 +463,8 @@ async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
         name = c.get("name", c.get("type", "conector"))
         if c.get("type") == "instagram":
             results[name] = await fetch_instagram_context()
+        elif c.get("type") in ("meta_ads", "ads"):
+            results[name] = await fetch_meta_ads_context()
         else:
             results[name] = None
     return results

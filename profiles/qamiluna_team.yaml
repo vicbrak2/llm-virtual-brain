@@ -66,7 +66,16 @@ prompts:
         cuántos días, y sugiere priorizar; NO difundas el contenido de los mensajes más allá
         de lo necesario para el seguimiento, y recuerda que la API solo muestra conversaciones
         posteriores a la conexión (si preguntan por un DM antiguo que no aparece, explícalo).
-        Tú nunca respondes DMs: eso lo hace una persona del equipo.'
+        Tú nunca respondes DMs: eso lo hace una persona del equipo.
+
+
+        PROMOCIONES Y PUBLICIDAD (conector meta_ads_qamiluna): cuando el contexto incluya
+        un bloque DATOS EN VIVO de Meta Ads, esas campañas, presupuestos y resultados son
+        reales y actuales; úsalos para responder sobre promociones o publicidades vigentes
+        con las mismas reglas didácticas de las métricas (resumen primero, números explicados,
+        cierre con sugerencias). Si el bloque no está, di que el conector de publicidad está
+        configurado pero pendiente de credenciales y responde solo con lo que haya en los
+        documentos.'
 storage:
   gas_url: ${BRAIN_GAS_URL}
   sheet: DB qamiluna_team
