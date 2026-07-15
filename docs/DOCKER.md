@@ -1,8 +1,8 @@
 # 🐳 Brain en Docker — orquestación multi-LLM
 
 Levanta el Brain Server (chat UI + API) en un contenedor, con **todos los
-providers LLM orquestados en cadena calidad-primero**: Gemini → Groq (Llama 3.3 70B)
-→ Cerebras → Mistral Large → OpenRouter → HuggingFace. Si un provider falla o
+providers LLM orquestados en cadena calidad-primero**: Groq (Llama 3.3 70B)
+→ Cerebras → OpenRouter → HuggingFace. Si un provider falla o
 no tiene API key, Brain rota automáticamente al siguiente sin perder el
 contexto de la conversación.
 
@@ -23,8 +23,6 @@ Pega tus keys (deja vacías las que no tengas):
 ```env
 GROQ_API_KEY=gsk_...
 CEREBRAS_API_KEY=csk-...
-GEMINI_API_KEY=AIza...
-MISTRAL_API_KEY=...
 OPENROUTER_API_KEY=sk-or-...
 HF_TOKEN=hf_...
 BRAIN_GAS_URL=
@@ -34,10 +32,8 @@ Dónde obtener cada key (guía paso a paso: [API_KEYS.md](API_KEYS.md)):
 
 | Provider | URL | Free tier |
 |---|---|---|
-| Gemini | https://aistudio.google.com/apikey | ✅ |
 | Groq | https://console.groq.com/keys | ✅ |
 | Cerebras | https://cloud.cerebras.ai | ✅ |
-| Mistral | https://console.mistral.ai/api-keys | ✅ (plan "Experiment") |
 | OpenRouter | https://openrouter.ai/keys | ✅ (modelos :free) |
 | HuggingFace | https://huggingface.co/settings/tokens | ✅ |
 
@@ -66,15 +62,15 @@ Invoke-RestMethod http://localhost:8901/api/status
 ```json
 {
   "active_profile": "creador",
-  "active": "gemini",
+  "active": "groq",
   "count": 2,
   "providers": [
-    {"order": 0, "name": "gemini", "model": "gemini-3.5-flash", "configured": true},
-    {"order": 1, "name": "groq", "model": "llama-3.3-70b-versatile", "configured": true}
+    {"order": 0, "name": "groq", "model": "llama-3.3-70b-versatile", "configured": true},
+    {"order": 1, "name": "cerebras", "model": "gpt-oss-120b", "configured": true}
   ],
   "skipped": [
-    {"name": "cerebras", "model": "gpt-oss-120b", "reason": "sin API key"},
-    {"name": "mistral", "model": "mistral-large-latest", "reason": "sin API key"}
+    {"name": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free", "reason": "sin API key"},
+    {"name": "hf", "model": "Qwen/Qwen2.5-72B-Instruct", "reason": "sin API key"}
   ]
 }
 ```

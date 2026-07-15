@@ -622,13 +622,10 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             "description": spec["descripcion"] or spec["nombre"],
             "app_name": f"brain_{tag}",
             "providers": [
-                {"name": "gemini", "api_key": "${GEMINI_API_KEY}", "model": "gemini-3.5-flash"},
                 {"name": "groq", "api_key": "${GROQ_API_KEY}",
                  "model": "llama-3.3-70b-versatile"},
                 {"name": "cerebras", "api_key": "${CEREBRAS_API_KEY}",
                  "extra_body": {"reasoning_effort": "high"}},
-                {"name": "mistral", "api_key": "${MISTRAL_API_KEY}",
-                 "model": "mistral-large-latest"},
                 {"name": "openrouter", "api_key": "${OPENROUTER_API_KEY}",
                  "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
                 {"name": "hf", "api_key": "${HF_TOKEN}"},

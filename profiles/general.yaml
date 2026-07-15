@@ -5,9 +5,6 @@ app_name: "brain_general"
 # Cadena orquestada CALIDAD-PRIMERO: se usan en orden y se rota al siguiente si
 # uno falla. Los providers sin API key en el entorno se omiten automáticamente.
 providers:
-  - name: "gemini"
-    api_key: "${GEMINI_API_KEY}"
-    model: "gemini-3.5-flash"
   - name: "groq"
     api_key: "${GROQ_API_KEY}"
     model: "llama-3.3-70b-versatile"
@@ -15,9 +12,6 @@ providers:
     api_key: "${CEREBRAS_API_KEY}"
     extra_body:
       reasoning_effort: "high"
-  - name: "mistral"
-    api_key: "${MISTRAL_API_KEY}"
-    model: "mistral-large-latest"
   - name: "openrouter"
     api_key: "${OPENROUTER_API_KEY}"
     model: "nvidia/nemotron-3-ultra-550b-a55b:free"

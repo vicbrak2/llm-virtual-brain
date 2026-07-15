@@ -13,26 +13,17 @@ si un provider falla o se queda sin cuota):
 
 | # | Provider | Modelo configurado | Rol en la cadena |
 |---|---|---|---|
-| 1 | Gemini | `gemini-3.5-flash` | Principal — generación 2026, gran calidad |
-| 2 | Groq | `llama-3.3-70b-versatile` | Llama 3.3 70B a gran velocidad (LPU) |
-| 3 | Cerebras | `gpt-oss-120b` (reasoning high) | Razonamiento profundo |
-| 4 | Mistral | `mistral-large-latest` | Modelo grande, free tier generoso |
-| 5 | OpenRouter | `nvidia/nemotron-3-ultra-550b-a55b:free` | Fallback gratuito |
-| 6 | HuggingFace | `Qwen/Qwen2.5-72B-Instruct` | Último recurso |
+| 1 | Groq | `llama-3.3-70b-versatile` | Principal — Llama 3.3 70B a gran velocidad (LPU) |
+| 2 | Cerebras | `gpt-oss-120b` (reasoning high) | Razonamiento profundo |
+| 3 | OpenRouter | `nvidia/nemotron-3-ultra-550b-a55b:free` | Fallback gratuito |
+| 4 | HuggingFace | `Qwen/Qwen2.5-72B-Instruct` | Último recurso |
+
+> Gemini y Mistral se retiraron de la cadena (sin API key en uso). Para
+> re-agregarlos basta añadir su bloque en los YAML de `profiles/`.
 
 ---
 
-## 1. Gemini (Google) — `GEMINI_API_KEY`
-
-1. Entra a **https://aistudio.google.com/apikey**
-2. Inicia sesión con tu cuenta de Google (la de Gmail sirve).
-3. Clic en **"Create API key"** → elige un proyecto (o deja que cree uno).
-4. Copia la key (empieza con `AIza...`).
-
-- Free tier: modelos **Flash y Flash-Lite** con límites por minuto/día.
-- No requiere tarjeta. Ojo: si activas billing en el proyecto, pierdes el free tier.
-
-## 2. Groq — `GROQ_API_KEY`
+## 1. Groq — `GROQ_API_KEY`
 
 1. Entra a **https://console.groq.com**
 2. Regístrate con Google o GitHub (gratis, sin tarjeta).
@@ -43,7 +34,7 @@ si un provider falla o se queda sin cuota):
 - Free tier: miles de requests/día según el modelo.
 - Aquí corre **Llama 3.3 70B** a gran velocidad (hardware LPU).
 
-## 3. Cerebras — `CEREBRAS_API_KEY`
+## 2. Cerebras — `CEREBRAS_API_KEY`
 
 1. Entra a **https://cloud.cerebras.ai**
 2. Regístrate (email o Google, sin tarjeta).
@@ -54,19 +45,7 @@ si un provider falla o se queda sin cuota):
 - El catálogo gratuito cambia seguido; si `gpt-oss-120b` desaparece,
   lista los vigentes con tu key: `curl https://api.cerebras.ai/v1/models -H "Authorization: Bearer csk-..."`
 
-## 4. Mistral — `MISTRAL_API_KEY`
-
-1. Entra a **https://console.mistral.ai**
-2. Regístrate (puede pedir verificación por teléfono).
-3. En el workspace, acepta el plan gratuito **"Experiment"**
-   (Billing → *Experiment for free*). Sin esto la API devuelve 401/403.
-4. Menú → **API Keys** → **"Create new key"** → copia la key.
-
-- Free tier: acceso a **todos** los modelos (incluido `mistral-large-latest`),
-  ~2 req/min y ~1B tokens/mes. Para evaluación, no producción — perfecto como
-  eslabón de la cadena.
-
-## 5. OpenRouter — `OPENROUTER_API_KEY`
+## 3. OpenRouter — `OPENROUTER_API_KEY`
 
 1. Entra a **https://openrouter.ai**
 2. Regístrate con Google/GitHub/email.
@@ -78,7 +57,7 @@ si un provider falla o se queda sin cuota):
   modelos `:free` sube ~5x.
 - Catálogo `:free` vigente: https://openrouter.ai/models/?q=free (rota seguido).
 
-## 6. HuggingFace — `HF_TOKEN`
+## 4. HuggingFace — `HF_TOKEN`
 
 1. Entra a **https://huggingface.co** y crea cuenta.
 2. Ve a **Settings → Access Tokens** (https://huggingface.co/settings/tokens).
@@ -105,7 +84,7 @@ Invoke-RestMethod http://localhost:8901/api/status
 - `active` → el que respondió el último mensaje.
 
 En los logs (`docker compose logs -f brain`) verás las rotaciones en vivo:
-`[brain] rotación dinámica → mistral (mistral-large-latest)`.
+`[brain] rotación dinámica → cerebras (gpt-oss-120b)`.
 
 ## Cambiar modelos o el orden
 
