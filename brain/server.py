@@ -361,6 +361,7 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                     "creator": p.creator,
                     "links": profile_meta(p.name).get("links", []),
                     "connectors": len(profile_meta(p.name).get("connectors", [])),
+                    "connectors_state": await _conn_health(p.name, trigger=False),
                 }
                 for p in profiles.values()
             ],
@@ -506,10 +507,30 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         return {"stored_as": stored_as,
                 "content": path.read_text(encoding="utf-8", errors="replace")[:MAX_DOC_CHARS]}
 
+    async def _conn_health(profile_name: str, trigger: bool = True):
+        from .connectors import connectors_health
+        return await connectors_health(
+            profile_meta(profile_name).get("connectors", []), trigger=trigger)
+
+    @app.on_event("startup")
+    async def warm_connectors():
+        """Calentar el cache de conectores en background (no bloquea el arranque)."""
+        import asyncio
+
+        async def warm():
+            for name in list(profiles):
+                try:
+                    await _conn_health(name, trigger=True)
+                except Exception as e:
+                    print(f"[connectors] warmup {name} falló: {str(e)[:120]}")
+
+        asyncio.get_event_loop().create_task(warm())
+
     @app.get("/api/status")
     async def status():
         p = profiles[state["active"]]
-        return {"active_profile": state["active"], **p.brain.status()}
+        conns = await _conn_health(p.name, trigger=True)
+        return {"active_profile": state["active"], **p.brain.status(), "connectors": conns}
 
     @app.get("/api/documents")
     async def documents(profile: Optional[str] = None):

@@ -15,6 +15,10 @@ Soportados:
     meta_ads — Meta Marketing API (graph.facebook.com): campañas y resultados.
         Credenciales vía env: META_ADS_ACCESS_TOKEN (Facebook Login, scope
         ads_read) y META_AD_ACCOUNT_ID. Sin credenciales queda como pendiente.
+    facebook_page — Página de Facebook (graph.facebook.com): perfil, fans y
+        últimas publicaciones con reacciones/comentarios/compartidos.
+        Reutiliza META_ADS_ACCESS_TOKEN (necesita pages_show_list +
+        pages_read_engagement); toma la primera página de /me/accounts.
 """
 
 import os
@@ -31,6 +35,11 @@ HISTORY_LIMIT = 100              # publicaciones para el resumen histórico mens
 INSIGHTS_MEDIA = 8               # publicaciones recientes con insights detallados
 
 _cache: Dict[str, Dict] = {}     # key → {"ts": epoch, "data": str|None}
+_status: Dict[str, Dict] = {}    # tipo → {"status": ok|pendiente|error, "detail": str, "ts": epoch}
+
+
+def _set_status(kind: str, status: str, detail: str = ""):
+    _status[kind] = {"status": status, "detail": detail, "ts": time.time()}
 
 
 def _cached(key: str) -> Optional[str]:
@@ -242,6 +251,7 @@ async def fetch_instagram_context() -> Optional[str]:
     métricas (+ insights por post), agregados y resumen histórico mensual."""
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
     if not token:
+        _set_status("instagram", "pendiente", "falta INSTAGRAM_ACCESS_TOKEN en .env")
         return None
 
     cached = _cached("instagram")
@@ -279,6 +289,7 @@ async def fetch_instagram_context() -> Optional[str]:
             dm_lines = await _dm_followup(client, token, prof.get("username", ""))
     except Exception as e:
         print(f"[connectors] instagram fetch falló: {str(e)[:200]}")
+        _set_status("instagram", "error", str(e)[:120])
         _store("instagram", None)
         return None
 
@@ -358,6 +369,8 @@ async def fetch_instagram_context() -> Optional[str]:
                          f"{s['comments']} comentarios en total")
 
     result = "\n".join(lines)
+    _set_status("instagram", "ok",
+                f"@{prof.get('username', '?')} · {prof.get('followers_count', '?')} seguidores")
     _store("instagram", result)
     return result
 
@@ -388,6 +401,7 @@ async def fetch_meta_ads_context() -> Optional[str]:
     token = os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
     account = os.getenv("META_AD_ACCOUNT_ID", "").strip()
     if not token or not account:
+        _set_status("meta_ads", "pendiente", "faltan META_ADS_ACCESS_TOKEN / META_AD_ACCOUNT_ID en .env")
         return None
     if not account.startswith("act_"):
         account = f"act_{account}"
@@ -416,6 +430,7 @@ async def fetch_meta_ads_context() -> Optional[str]:
             by_id = {i.get("campaign_id"): i for i in ins.get("data", [])}
     except Exception as e:
         print(f"[connectors] meta_ads fetch falló: {str(e)[:200]}")
+        _set_status("meta_ads", "error", str(e)[:120])
         _store("meta_ads", None)
         return None
 
@@ -448,8 +463,130 @@ async def fetch_meta_ads_context() -> Optional[str]:
                              + (f" · acciones: {acciones}" if acciones else ""))
 
     result = "\n".join(lines)
+    _set_status("meta_ads", "ok",
+                f"cuenta {acct.get('name', account)} · {len(active)} campañas activas")
     _store("meta_ads", result)
     return result
+
+
+async def fetch_facebook_page_context() -> Optional[str]:
+    """Snapshot de la página de Facebook: perfil, fans y últimas publicaciones.
+
+    Reutiliza META_ADS_ACCESS_TOKEN (scopes pages_show_list +
+    pages_read_engagement ya concedidos junto con ads_read).
+    """
+    token = os.getenv("FACEBOOK_PAGE_TOKEN", "").strip() or \
+        os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
+    if not token:
+        _set_status("facebook_page", "pendiente", "falta META_ADS_ACCESS_TOKEN en .env")
+        return None
+
+    cached = _cached("facebook_page")
+    if cached is not None:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            accounts = await _fb_get(client, "me/accounts",
+                                     fields="id,name,access_token,fan_count,"
+                                            "followers_count,link,category",
+                                     access_token=token)
+            pages = accounts.get("data", [])
+            if not pages:
+                _set_status("facebook_page", "error",
+                            "el token no administra ninguna página (pages_show_list)")
+                _store("facebook_page", None)
+                return None
+            page = pages[0]
+            page_token = page.get("access_token") or token
+            try:
+                # Con pages_read_user_content: posts con reacciones y comentarios
+                posts = await _fb_get(client, f"{page['id']}/posts",
+                                      fields="message,created_time,shares,"
+                                             "reactions.summary(true),"
+                                             "comments.summary(true),permalink_url",
+                                      limit="10", access_token=page_token)
+            except Exception:
+                # Sin ese permiso: posts básicos (sin métricas de interacción)
+                posts = await _fb_get(client, f"{page['id']}/posts",
+                                      fields="message,created_time,shares,permalink_url",
+                                      limit="10", access_token=page_token)
+            post_list = posts.get("data", [])
+    except Exception as e:
+        print(f"[connectors] facebook_page fetch falló: {str(e)[:200]}")
+        _set_status("facebook_page", "error", str(e)[:120])
+        _store("facebook_page", None)
+        return None
+
+    lines = [f"PÁGINA DE FACEBOOK — '{page.get('name', '?')}' ({page.get('category', '')})",
+             f"Fans: {page.get('fan_count', '?')} · Seguidores: {page.get('followers_count', '?')} "
+             f"· {page.get('link', '')}"]
+    if not post_list:
+        lines.append("Sin publicaciones recientes en la página.")
+    else:
+        lines.append(f"\nÚLTIMAS {len(post_list)} PUBLICACIONES:")
+        for p in post_list:
+            texto = (p.get("message") or "(sin texto)").replace("\n", " ")[:80]
+            fecha = (p.get("created_time") or "")[:10]
+            shares = (p.get("shares") or {}).get("count", 0)
+            if "reactions" in p or "comments" in p:
+                reacts = ((p.get("reactions") or {}).get("summary") or {}).get("total_count", 0)
+                comments = ((p.get("comments") or {}).get("summary") or {}).get("total_count", 0)
+                lines.append(f"- [{fecha}] \"{texto}\" — {reacts} reacciones, "
+                             f"{comments} comentarios, {shares} compartidos")
+            else:
+                lines.append(f"- [{fecha}] \"{texto}\" — {shares} compartidos "
+                             f"(reacciones/comentarios requieren permiso pages_read_user_content)")
+
+    result = "\n".join(lines)
+    _set_status("facebook_page", "ok",
+                f"página {page.get('name', '?')} · {page.get('fan_count', '?')} fans")
+    _store("facebook_page", result)
+    return result
+
+
+async def _meta_token_expiry() -> Optional[int]:
+    """Días restantes del META_ADS_ACCESS_TOKEN (via debug_token; cache 1h)."""
+    token = os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
+    if not token:
+        return None
+    hit = _cache.get("meta_token_expiry")
+    if hit and (time.time() - hit["ts"]) < 3600:
+        return hit["data"]
+    days = None
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            d = await _fb_get(client, "debug_token",
+                              input_token=token, access_token=token)
+            expires = (d.get("data") or {}).get("expires_at") or 0
+            if expires:
+                days = max(0, int((expires - time.time()) / 86400))
+    except Exception:
+        pass
+    _cache["meta_token_expiry"] = {"ts": time.time(), "data": days}
+    return days
+
+
+async def connectors_health(connectors: list, trigger: bool = True) -> List[Dict]:
+    """Estado en vivo de los conectores de un perfil para /api/status y la UI.
+
+    Con trigger=True ejecuta cada conector (usa el cache de 10 min, así que es
+    barato); con trigger=False solo reporta el último estado conocido.
+    Devuelve [{name, type, status, detail, expires_in_days}].
+    """
+    if trigger:
+        await run_connectors(connectors)
+    expiry = await _meta_token_expiry() if (trigger or _status) else None
+    out = []
+    for c in connectors or []:
+        kind = c.get("type", "?")
+        st = _status.get(kind, {"status": "pendiente", "detail": "sin datos aún (se activa con el primer chat)"})
+        item = {"name": c.get("name", kind), "type": kind,
+                "status": st["status"], "detail": st.get("detail", "")}
+        if kind in ("meta_ads", "ads", "facebook_page") and expiry is not None:
+            item["expires_in_days"] = expiry
+        out.append(item)
+    return out
 
 
 async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
@@ -465,6 +602,8 @@ async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
             results[name] = await fetch_instagram_context()
         elif c.get("type") in ("meta_ads", "ads"):
             results[name] = await fetch_meta_ads_context()
+        elif c.get("type") == "facebook_page":
+            results[name] = await fetch_facebook_page_context()
         else:
             results[name] = None
     return results
