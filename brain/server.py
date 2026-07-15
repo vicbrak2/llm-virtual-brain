@@ -129,7 +129,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[Dict] = []
     profile: Optional[str] = None
-    max_tokens: int = 1400  # con margen para modelos razonadores (reasoning + respuesta)
+    max_tokens: int = 3000  # informes largos + margen para modelos razonadores (reasoning + respuesta)
     temperature: float = 0.3
     refine: bool = True  # pipeline multi-LLM (borrador → refina → final) con trace
 
