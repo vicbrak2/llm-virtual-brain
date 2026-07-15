@@ -541,13 +541,23 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             })
         connectors = profile_meta(p.name).get("connectors", [])
         if connectors:
-            conn_desc = ", ".join(f"{c.get('name', '?')} ({c.get('type', 'api')})" for c in connectors)
-            messages.append({
-                "role": "system",
-                "content": f"CONECTORES CONFIGURADOS (aún no ejecutables en tiempo real; si el "
-                           f"usuario pide datos que dependen de ellos, indica que la conexión está "
-                           f"configurada pero pendiente de activación): {conn_desc}",
-            })
+            from .connectors import run_connectors
+            live = await run_connectors(connectors)
+            pending = [n for n, ctx in live.items() if ctx is None]
+            for cname, ctx in live.items():
+                if ctx:
+                    messages.append({
+                        "role": "system",
+                        "content": f"DATOS EN VIVO — conector '{cname}' "
+                                   f"(obtenidos ahora de la API, son reales y actuales):\n\n{ctx}",
+                    })
+            if pending:
+                messages.append({
+                    "role": "system",
+                    "content": "CONECTORES CONFIGURADOS PERO SIN DATOS EN VIVO (si el usuario pide "
+                               "datos que dependen de ellos, indica que la conexión está configurada "
+                               "pero pendiente de activación): " + ", ".join(pending),
+                })
         for h in body.history[-8:]:
             if h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": h["content"]})
