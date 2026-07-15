@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Union
 
@@ -112,6 +113,87 @@ class Brain:
         Rota providers automáticamente si alguno falla.
         """
         return await self._call_providers_chain(messages, max_tokens, temperature)
+
+    async def complete_refined(
+        self,
+        messages: List[Union[Dict, Message]],
+        max_tokens: int = 600,
+        temperature: float = 0.2,
+        max_steps: int = 3,
+    ) -> tuple:
+        """
+        Pipeline multi-LLM: el primer provider redacta un borrador y los
+        siguientes lo refinan en secuencia (cada paso usa un provider distinto).
+        Devuelve (texto_final, trace) donde trace registra el trabajo de cada
+        LLM: paso, rol (borrador/refina/final), provider, modelo, ms y salida.
+        Si un provider falla en su paso, el siguiente disponible lo cubre; el
+        fallo queda registrado en el trace.
+        """
+        if not self.providers:
+            # Mismo error que la cadena clásica
+            return await self._call_providers_chain(messages, max_tokens, temperature), []
+
+        steps = max(1, min(max_steps, len(self.providers)))
+        trace: List[Dict] = []
+        current: Optional[str] = None
+        used: set = set()
+
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            for step in range(steps):
+                role = "borrador" if step == 0 else ("final" if step == steps - 1 else "refina")
+                step_messages = messages if step == 0 else self._build_refine_messages(messages, current)
+
+                done = False
+                for provider in self.providers:
+                    if provider.name in used:
+                        continue
+                    t0 = time.monotonic()
+                    try:
+                        out = await self._call_provider(
+                            client, provider, step_messages, max_tokens, temperature
+                        )
+                        trace.append({
+                            "step": step + 1, "role": role, "provider": provider.name,
+                            "model": provider.model, "ms": int((time.monotonic() - t0) * 1000),
+                            "output": out,
+                        })
+                        used.add(provider.name)
+                        current = out
+                        self._last_used = provider.name
+                        done = True
+                        break
+                    except Exception as e:
+                        trace.append({
+                            "step": step + 1, "role": role, "provider": provider.name,
+                            "model": provider.model, "ms": int((time.monotonic() - t0) * 1000),
+                            "error": str(e)[:120],
+                        })
+                        used.add(provider.name)
+                if not done:
+                    break  # sin providers libres para este paso: entregar lo que haya
+
+        if current is None:
+            errs = " | ".join(f"{t['provider']}: {t.get('error', '?')}" for t in trace)
+            raise BrainError("Todos los providers fallaron · " + errs)
+        return current, trace
+
+    def _build_refine_messages(self, messages: List, draft: str) -> List[Dict]:
+        """Conversación para un paso de refinado: historial original + borrador
+        del LLM anterior + instrucción de mejorarlo sin romper estructura."""
+        base = [
+            m if isinstance(m, dict) else {"role": m.role, "content": m.content}
+            for m in messages
+        ]
+        return base + [
+            {"role": "assistant", "content": draft},
+            {"role": "user", "content": (
+                "Revisa tu respuesta anterior como editor experto: corrige errores, "
+                "completa lo que falte y mejora claridad y estructura. Mantén el idioma "
+                "del usuario y CONSERVA intactos los bloques estructurados (XML, JSON, "
+                "código, etiquetas como <brain-agent>) si existen. Devuelve ÚNICAMENTE "
+                "la versión final mejorada, sin comentarios sobre el borrador."
+            )},
+        ]
 
     # ── API de alto nivel: prompt por etapa + contexto ─────────────────────
     async def think(

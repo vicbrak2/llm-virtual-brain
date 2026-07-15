@@ -129,8 +129,9 @@ class ChatRequest(BaseModel):
     message: str
     history: List[Dict] = []
     profile: Optional[str] = None
-    max_tokens: int = 700
+    max_tokens: int = 1400  # con margen para modelos razonadores (reasoning + respuesta)
     temperature: float = 0.3
+    refine: bool = True  # pipeline multi-LLM (borrador → refina → final) con trace
 
 
 class ActivateRequest(BaseModel):
@@ -552,15 +553,23 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": body.message})
 
+        trace = None
         try:
-            reply = await p.brain.complete(
-                messages, max_tokens=body.max_tokens, temperature=body.temperature
-            )
+            if body.refine and len(p.brain.providers) > 1:
+                reply, trace = await p.brain.complete_refined(
+                    messages, max_tokens=body.max_tokens, temperature=body.temperature
+                )
+            else:
+                reply = await p.brain.complete(
+                    messages, max_tokens=body.max_tokens, temperature=body.temperature
+                )
         except Exception as e:
             raise HTTPException(502, f"Todos los proveedores fallaron: {str(e)[:200]}")
 
         st = p.brain.status()
         result = {"reply": reply, "provider": st["active"], "profile": p.name}
+        if trace:
+            result["trace"] = trace
 
         # Perfil creador: si la respuesta confirma un agente (<brain-agent>), materializarlo
         if p.creator:

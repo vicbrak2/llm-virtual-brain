@@ -59,8 +59,16 @@ class Provider:
         """Extraer contenido. Modelos de razonamiento (Cerebras) pueden dejar
         content vacío y todo en reasoning — se acepta cualquiera de los dos."""
         try:
-            msg = response_json["choices"][0]["message"]
-            return msg.get("content") or msg.get("reasoning") or ""
+            choice = response_json["choices"][0]
+            msg = choice["message"]
+            content = msg.get("content") or ""
+            if content.strip():
+                return content
+            # Sin content y cortado por límite de tokens: el reasoning quedó a
+            # medias y no es una respuesta — mejor fallar y rotar de provider.
+            if choice.get("finish_reason") == "length":
+                raise ValueError("truncado por max_tokens en pleno razonamiento (sin content)")
+            return msg.get("reasoning") or ""
         except (KeyError, IndexError, TypeError) as e:
             raise ValueError(f"Formato de respuesta inválido: {e}")
 
@@ -82,8 +90,8 @@ KNOWN_PROVIDERS: Dict[str, Dict] = {
     },
     "groq": {
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        # llama-3.3-70b-versatile fue deprecado por Groq; gpt-oss-120b es el reemplazo recomendado
-        "model": "openai/gpt-oss-120b",
+        # verificado 2026-07: llama-3.3-70b-versatile sigue vigente; kimi-k2 no existe en Groq
+        "model": "llama-3.3-70b-versatile",
     },
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
