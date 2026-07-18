@@ -23,6 +23,7 @@ Soportados:
 
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -74,6 +75,61 @@ async def _media_insights(client: httpx.AsyncClient, token: str, media_id: str,
                 for d in data.get("data", [])}
     except Exception:
         return {}
+
+
+_HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
+
+
+def _hashtag_performance(media: List[Dict], insights_by_id: Dict[str, Dict],
+                         min_posts: int = 2, top_n: int = 8) -> List[str]:
+    """Agrega alcance/likes/guardados por hashtag a partir de los captions
+    completos de `media`. Solo reporta hashtags usados en >= min_posts
+    publicaciones (con menos, el promedio es ruido, no señal)."""
+    stats: Dict[str, Dict[str, float]] = defaultdict(
+        lambda: {"posts": 0, "likes": 0, "comments": 0, "reach": 0, "saved": 0, "con_alcance": 0})
+
+    for m in media:
+        caption = m.get("caption") or ""
+        tags = {t.lower() for t in _HASHTAG_RE.findall(caption)}
+        if not tags:
+            continue
+        likes = m.get("like_count") or 0
+        comments = m.get("comments_count") or 0
+        ins = insights_by_id.get(m["id"], {})
+        reach = ins.get("reach") or 0
+        saved = ins.get("saved") or 0
+        for tag in tags:
+            s = stats[tag]
+            s["posts"] += 1
+            s["likes"] += likes
+            s["comments"] += comments
+            if reach:
+                s["reach"] += reach
+                s["con_alcance"] += 1
+            s["saved"] += saved
+
+    calificables = {tag: s for tag, s in stats.items() if s["posts"] >= min_posts}
+    if not calificables:
+        return []
+
+    def score(s: Dict[str, float]) -> float:
+        # Alcance promedio si hay datos de insights; si no, engagement (likes+comentarios)
+        if s["con_alcance"]:
+            return s["reach"] / s["con_alcance"]
+        return (s["likes"] + s["comments"]) / s["posts"]
+
+    ranking = sorted(calificables.items(), key=lambda kv: score(kv[1]), reverse=True)[:top_n]
+
+    lines = [f"Rendimiento por hashtag (usados en {min_posts}+ de las publicaciones analizadas):"]
+    for tag, s in ranking:
+        n = s["posts"]
+        parts = [f"{s['likes']/n:.1f} likes/post", f"{s['comments']/n:.1f} comentarios/post"]
+        if s["con_alcance"]:
+            parts.insert(0, f"{s['reach']/s['con_alcance']:.0f} alcance/post")
+        if s["saved"]:
+            parts.append(f"{s['saved']/n:.1f} guardados/post")
+        lines.append(f"- #{tag} ({n} publicaciones): " + ", ".join(parts))
+    return lines
 
 
 async def _recent_comments(client: httpx.AsyncClient, token: str,
@@ -354,6 +410,10 @@ async def fetch_instagram_context() -> Optional[str]:
             best_caption = (best.get("caption") or "").replace("\n", " ")[:80]
             lines.append(f"- Mejor publicación: {best.get('like_count', 0)} me gusta / "
                          f"{best.get('comments_count', 0)} comentarios — \"{best_caption}\"")
+
+    hashtag_lines = _hashtag_performance(recientes, insights_by_id)
+    if hashtag_lines:
+        lines += [""] + hashtag_lines
 
     # Resumen histórico mensual (hasta HISTORY_LIMIT publicaciones)
     if len(media_all) > len(recientes):
