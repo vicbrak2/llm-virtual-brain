@@ -818,8 +818,9 @@ async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
 # ============ WEBHOOK HANDLERS & GOOGLE SHEETS INTEGRATION ============
 
 # Cola local anti-pérdida: si Sheets no responde, los leads quedan aquí
-# y se reintentan en el loop periódico (cada 15 min).
-PENDING_LEADS_FILE = Path(__file__).resolve().parent / "pending_leads.jsonl"
+# y se reintentan en el loop periódico (cada 15 min). Vive en data/ porque
+# es el volumen persistente en Docker (brain/ es efímero en el contenedor).
+PENDING_LEADS_FILE = Path(os.getenv("BRAIN_DATA", "data")) / "pending_leads.jsonl"
 
 # Encabezados por pestaña: el GAS crea la pestaña con estos headers si no existe.
 TAB_HEADERS = {
@@ -1098,35 +1099,50 @@ async def sync_instagram_dms() -> bool:
         print("[dm_sync] Faltan credenciales")
         return False
 
+    # Memoria de mensajes ya insertados (evita duplicar filas en cada pasada)
+    seen_path = Path(os.getenv("BRAIN_DATA", "data")) / "dm_seen.json"
+    try:
+        seen = set(json.loads(seen_path.read_text(encoding="utf-8")))
+    except Exception:
+        seen = set()
+
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # Obtener conversaciones de Instagram
             data = await _get(client, f"{ig_user_id}/conversations",
-                            fields="id,name,last_message,updated_time,participants",
+                            fields="id,updated_time,"
+                                   "messages.limit(10){id,message,from,created_time}",
                             access_token=token)
 
-            conversations = data.get("data", [])
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            nuevos = 0
+            for conv in data.get("data", []):
+                for msg in conv.get("messages", {}).get("data", []):
+                    msg_id = msg.get("id", "")
+                    sender = msg.get("from", {}) or {}
+                    # Solo mensajes entrantes (no los que envía la propia cuenta)
+                    if not msg_id or msg_id in seen or sender.get("id") == ig_user_id:
+                        continue
+                    texto = (msg.get("message") or "").strip()
+                    if not texto:
+                        continue  # stickers/media sin texto
 
-            for conv in conversations:
-                last_msg = conv.get("last_message", {})
-                if not last_msg:
-                    continue
+                    ts = str(msg.get("created_time", ""))[:19].replace("T", " ")
+                    row = [
+                        ts or time.strftime("%Y-%m-%d %H:%M:%S"),
+                        sender.get("username", "desconocido"),
+                        texto[:500],
+                        "Instagram DM",
+                        "✅",  # leído por Brain
+                        "❌",  # no respondido aún (manual)
+                        ""     # asignada a (manual)
+                    ]
+                    if await _append_to_gsheet(sheet_id, "CONTACTOS_DIRECTOS", [row]):
+                        seen.add(msg_id)
+                        nuevos += 1
 
-                row = [
-                    timestamp,
-                    conv.get("name", "Desconocido"),
-                    last_msg.get("message", "—"),
-                    "Instagram DM",
-                    "✅",  # read
-                    "❌",  # no respondido aún (manual)
-                    ""     # asignada a (manual)
-                ]
-
-                await _append_to_gsheet(sheet_id, "CONTACTOS_DIRECTOS", [row])
-
-            if conversations:
-                print(f"[dm_sync] {len(conversations)} conversaciones sincronizadas")
+            if nuevos:
+                seen_path.parent.mkdir(parents=True, exist_ok=True)
+                seen_path.write_text(json.dumps(sorted(seen)), encoding="utf-8")
+                print(f"[dm_sync] {nuevos} mensaje(s) nuevo(s) sincronizados")
             return True
 
     except Exception as e:

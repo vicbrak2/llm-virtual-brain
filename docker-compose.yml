@@ -17,3 +17,13 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # Túnel público para los webhooks de Meta (quick tunnel: la URL cambia si
+  # el contenedor se recrea — ver VERIFICACION_NEGOCIO_META.md para actualizarla)
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: brain-tunnel
+    command: tunnel --url http://brain:8901
+    depends_on:
+      - brain
+    restart: unless-stopped

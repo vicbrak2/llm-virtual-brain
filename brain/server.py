@@ -27,16 +27,20 @@ import asyncio
 from datetime import datetime
 
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Cargar .env del repo y de brain/ antes de leer cualquier os.getenv.
 # brain/.env pisa al del repo si repiten claves (es el más específico).
-_PKG_DIR = Path(__file__).resolve().parent
-load_dotenv(_PKG_DIR.parent / ".env")
-load_dotenv(_PKG_DIR / ".env", override=True)
+# En Docker las variables llegan por env_file, así que dotenv es opcional.
+try:
+    from dotenv import load_dotenv
+    _PKG_DIR = Path(__file__).resolve().parent
+    load_dotenv(_PKG_DIR.parent / ".env")
+    load_dotenv(_PKG_DIR / ".env", override=True)
+except ImportError:
+    pass
 
 from .config import load_config_from_yaml, _substitute_env_vars
 from .core import Brain
