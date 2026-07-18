@@ -4,7 +4,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from typing import Optional, Dict, List, Union
+from typing import Awaitable, Callable, Optional, Dict, List, Union
 
 import httpx
 
@@ -12,6 +12,10 @@ from .errors import BrainError
 from .providers import KNOWN_PROVIDERS, Provider, provider_from_dict
 from .context import ContextProvider, context_from_dict
 from .prompts import PromptLoader, loader_from_dict
+
+MAX_CONTINUATIONS = 3  # reintentos de "continúa" ante una respuesta cortada por max_tokens
+
+OnStep = Optional[Callable[[Dict], Awaitable[None]] ]  # callback opcional para estado en vivo
 
 
 @dataclass
@@ -106,13 +110,14 @@ class Brain:
         messages: List[Union[Dict, Message]],
         max_tokens: int = 600,
         temperature: float = 0.2,
+        on_step: OnStep = None,
     ) -> str:
         """
         Completar una conversación ya construida (lista de dicts o Message).
         Ideal cuando la app arma sus propios messages (historial, contexto custom).
         Rota providers automáticamente si alguno falla.
         """
-        return await self._call_providers_chain(messages, max_tokens, temperature)
+        return await self._call_providers_chain(messages, max_tokens, temperature, on_step)
 
     async def complete_refined(
         self,
@@ -120,18 +125,22 @@ class Brain:
         max_tokens: int = 600,
         temperature: float = 0.2,
         max_steps: int = 3,
+        on_step: OnStep = None,
     ) -> tuple:
         """
         Pipeline multi-LLM: el primer provider redacta un borrador y los
         siguientes lo refinan en secuencia (cada paso usa un provider distinto).
         Devuelve (texto_final, trace) donde trace registra el trabajo de cada
-        LLM: paso, rol (borrador/refina/final), provider, modelo, ms y salida.
+        LLM: paso, rol (borrador/refina/final), provider, modelo, ms, si hubo
+        que continuar por corte de max_tokens, y salida.
         Si un provider falla en su paso, el siguiente disponible lo cubre; el
         fallo queda registrado en el trace.
+        `on_step` (opcional, async) se invoca en cada evento — start/done/error
+        por intento — para exponer estado en vivo de la orquestación.
         """
         if not self.providers:
             # Mismo error que la cadena clásica
-            return await self._call_providers_chain(messages, max_tokens, temperature), []
+            return await self._call_providers_chain(messages, max_tokens, temperature, on_step), []
 
         steps = max(1, min(max_steps, len(self.providers)))
         trace: List[Dict] = []
@@ -148,26 +157,38 @@ class Brain:
                     if provider.name in used:
                         continue
                     t0 = time.monotonic()
+                    await _emit(on_step, {"step": step + 1, "role": role,
+                                          "provider": provider.name, "model": provider.model,
+                                          "phase": "start"})
                     try:
-                        out = await self._call_provider(
+                        out, still_truncated, continuations = await self._call_provider_complete(
                             client, provider, step_messages, max_tokens, temperature
                         )
+                        ms = int((time.monotonic() - t0) * 1000)
                         trace.append({
                             "step": step + 1, "role": role, "provider": provider.name,
-                            "model": provider.model, "ms": int((time.monotonic() - t0) * 1000),
-                            "output": out,
+                            "model": provider.model, "ms": ms, "output": out,
+                            "continuations": continuations, "truncated": still_truncated,
                         })
+                        await _emit(on_step, {"step": step + 1, "role": role,
+                                              "provider": provider.name, "model": provider.model,
+                                              "phase": "done", "ms": ms,
+                                              "continuations": continuations})
                         used.add(provider.name)
                         current = out
                         self._last_used = provider.name
                         done = True
                         break
                     except Exception as e:
+                        ms = int((time.monotonic() - t0) * 1000)
                         trace.append({
                             "step": step + 1, "role": role, "provider": provider.name,
-                            "model": provider.model, "ms": int((time.monotonic() - t0) * 1000),
+                            "model": provider.model, "ms": ms,
                             "error": str(e)[:120],
                         })
+                        await _emit(on_step, {"step": step + 1, "role": role,
+                                              "provider": provider.name, "model": provider.model,
+                                              "phase": "error", "ms": ms, "error": str(e)[:120]})
                         used.add(provider.name)
                 if not done:
                     break  # sin providers libres para este paso: entregar lo que haya
@@ -203,6 +224,7 @@ class Brain:
         max_tokens: int = 600,
         temperature: float = 0.2,
         stage_name: str = "default",
+        on_step: OnStep = None,
     ) -> str:
         """
         Consultar al LLM: carga el prompt de la etapa, enriquece contexto
@@ -220,7 +242,7 @@ class Brain:
                 print(f"[brain] contexto falló (continúo sin él): {e}")
 
         messages = self._build_messages(system_prompt, user_msg, enriched)
-        return await self._call_providers_chain(messages, max_tokens, temperature)
+        return await self._call_providers_chain(messages, max_tokens, temperature, on_step)
 
     async def think_json(
         self,
@@ -255,6 +277,7 @@ class Brain:
         messages: List,
         max_tokens: int,
         temperature: float,
+        on_step: OnStep = None,
     ) -> str:
         """Cadena con rotación dinámica y sticky index."""
         if not self.providers:
@@ -272,14 +295,23 @@ class Brain:
             for offset in range(n):
                 idx = (self._active_idx + offset) % n
                 provider = self.providers[idx]
+                t0 = time.monotonic()
+                await _emit(on_step, {"step": 1, "role": "respuesta",
+                                      "provider": provider.name, "model": provider.model,
+                                      "phase": "start"})
                 try:
-                    response = await self._call_provider(
+                    response, _truncated, continuations = await self._call_provider_complete(
                         client, provider, messages, max_tokens, temperature
                     )
                     if offset:
                         print(f"[brain] rotación dinámica → {provider.name} ({provider.model})")
                     self._active_idx = idx
                     self._last_used = provider.name
+                    await _emit(on_step, {"step": 1, "role": "respuesta",
+                                          "provider": provider.name, "model": provider.model,
+                                          "phase": "done",
+                                          "ms": int((time.monotonic() - t0) * 1000),
+                                          "continuations": continuations})
                     return response
                 except Exception as e:
                     body = ""
@@ -289,7 +321,13 @@ class Brain:
                             body = resp.text[:120]
                         except Exception:
                             body = ""
-                    errors.append(f"{provider.name}: {str(e)[:80]} {body}".strip())
+                    msg = f"{str(e)[:80]} {body}".strip()
+                    errors.append(f"{provider.name}: {msg}")
+                    await _emit(on_step, {"step": 1, "role": "respuesta",
+                                          "provider": provider.name, "model": provider.model,
+                                          "phase": "error",
+                                          "ms": int((time.monotonic() - t0) * 1000),
+                                          "error": msg[:120]})
                     continue
 
         raise BrainError("Todos los providers fallaron · " + " | ".join(errors))
@@ -301,17 +339,48 @@ class Brain:
         messages: List,
         max_tokens: int,
         temperature: float,
-    ) -> str:
+    ) -> tuple:
         headers = provider.get_headers()
         payload = provider.get_payload(messages, max_tokens, temperature)
 
         r = await client.post(provider.url, headers=headers, json=payload)
         r.raise_for_status()
 
-        content = provider.parse_response(r.json())
+        content, truncated = provider.parse_response(r.json())
         if not content.strip():
             raise ValueError("respuesta vacía (sin content)")
-        return content
+        return content, truncated
+
+    async def _call_provider_complete(
+        self,
+        client: httpx.AsyncClient,
+        provider: Provider,
+        messages: List,
+        max_tokens: int,
+        temperature: float,
+    ) -> tuple:
+        """Llama al provider y, si la respuesta quedó cortada por max_tokens
+        (finish_reason == "length"), la continúa automáticamente con el MISMO
+        provider hasta completarla o agotar MAX_CONTINUATIONS intentos.
+        Garantiza una respuesta íntegra sin importar dónde cada LLM decida
+        cortar su salida. Devuelve (texto_completo, sigue_truncado, n_continuaciones)."""
+        content, truncated = await self._call_provider(client, provider, messages, max_tokens, temperature)
+        full = content
+        convo = [m if isinstance(m, dict) else {"role": m.role, "content": m.content} for m in messages]
+        attempts = 0
+        while truncated and attempts < MAX_CONTINUATIONS:
+            attempts += 1
+            convo = convo + [
+                {"role": "assistant", "content": full},
+                {"role": "user", "content": (
+                    "Tu respuesta anterior quedó cortada por límite de longitud. "
+                    "Continúa EXACTAMENTE donde quedaste, sin repetir nada de lo ya "
+                    "escrito, sin reintroducciones ni comentarios sobre el corte."
+                )},
+            ]
+            content, truncated = await self._call_provider(client, provider, convo, max_tokens, temperature)
+            full += content
+        return full, truncated, attempts
 
     def _build_messages(self, system_prompt: str, user_msg: str, context: Dict) -> List[Message]:
         messages = []
@@ -340,6 +409,16 @@ class Brain:
                 for p in self.skipped_providers
             ],
         }
+
+
+async def _emit(on_step: OnStep, event: Dict) -> None:
+    """Dispara el callback de estado en vivo sin romper la orquestación si falla."""
+    if on_step is None:
+        return
+    try:
+        await on_step(event)
+    except Exception:
+        pass  # el monitor es best-effort; nunca debe tumbar una respuesta
 
 
 def extract_json(text: str) -> Optional[Dict]:

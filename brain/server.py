@@ -50,6 +50,41 @@ from .connectors import (handle_instagram_leads_webhook, sync_meta_ads_insights,
 MAX_DOC_CHARS = 60_000          # límite por documento subido
 CONTEXT_BUDGET_CHARS = 12_000   # presupuesto de contexto de documentos por chat
 
+# ── Monitor en vivo de la orquestación multi-LLM ────────────────────────────
+# Estado global (single-process, asyncio): el handler de /api/chat lo va
+# actualizando paso a paso vía el callback on_step de Brain; /api/chat/status
+# lo expone para que la UI muestre progreso real mientras la respuesta se arma.
+RESPONSE_TIMES_HISTORY = 20      # cuántas duraciones recientes se guardan por perfil
+_live_run: Dict = {"run_id": 0, "active": False, "profile": None, "steps": [], "started_at": None}
+_response_times_path: Optional[Path] = None   # se fija en create_app()
+_response_times: Dict[str, List[int]] = {}    # perfil → [ms, ms, ...] (recientes primero)
+
+
+def _load_response_times() -> None:
+    global _response_times
+    if _response_times_path and _response_times_path.exists():
+        try:
+            _response_times = json.loads(_response_times_path.read_text(encoding="utf-8"))
+        except Exception:
+            _response_times = {}
+
+
+def _record_response_time(profile: str, ms: int) -> None:
+    times = _response_times.setdefault(profile, [])
+    times.insert(0, ms)
+    del times[RESPONSE_TIMES_HISTORY:]
+    if _response_times_path:
+        try:
+            _response_times_path.parent.mkdir(parents=True, exist_ok=True)
+            _response_times_path.write_text(json.dumps(_response_times), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _avg_response_time(profile: str) -> Optional[int]:
+    times = _response_times.get(profile) or []
+    return int(sum(times) / len(times)) if times else None
+
 # ── Formato de intercambio con agentes externos ─────────────────────────────
 # El prompt generado le exige al agente externo responder SOLO con este XML;
 # /api/import lo parsea, lo persiste (local + Sheets) y lo suma al contexto.
@@ -255,6 +290,10 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
     profiles_path = Path(profiles_dir)
     data_path = Path(data_dir)
     data_path.mkdir(parents=True, exist_ok=True)
+
+    global _response_times_path
+    _response_times_path = data_path / "response_times.json"
+    _load_response_times()
 
     profiles: Dict[str, ProfileRuntime] = {}
     if profiles_path.exists():
@@ -552,6 +591,23 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         conns = await _conn_health(p.name, trigger=True)
         return {"active_profile": state["active"], **p.brain.status(), "connectors": conns}
 
+    @app.get("/api/chat/status")
+    async def chat_status(profile: Optional[str] = None):
+        """Estado en vivo de la orquestación multi-LLM en curso (si hay una),
+        más el promedio histórico de tiempos de respuesta del perfil — para
+        que la UI muestre progreso real mientras arma la respuesta."""
+        prof = profile or _live_run.get("profile") or state["active"]
+        return {
+            "run_id": _live_run["run_id"],
+            "active": _live_run["active"],
+            "profile": _live_run.get("profile"),
+            "steps": _live_run["steps"],
+            "elapsed_ms": (int((time.monotonic() - _live_run["started_at"]) * 1000)
+                          if _live_run["active"] and _live_run["started_at"] else 0),
+            "avg_ms": _avg_response_time(prof),
+            "history_count": len(_response_times.get(prof) or []),
+        }
+
     @app.get("/api/documents")
     async def documents(profile: Optional[str] = None):
         p = get_profile(profile)
@@ -604,21 +660,41 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": body.message})
 
+        # Monitor en vivo: un nuevo run_id invalida el anterior para pollers
+        # que sigan escuchando una respuesta ya terminada/reemplazada.
+        _live_run["run_id"] += 1
+        run_id = _live_run["run_id"]
+        _live_run.update({"active": True, "profile": p.name, "steps": [], "started_at": time.monotonic()})
+
+        async def on_step(event: Dict):
+            if _live_run["run_id"] == run_id:
+                _live_run["steps"].append(event)
+
+        t0 = time.monotonic()
         trace = None
         try:
             if body.refine and len(p.brain.providers) > 1:
                 reply, trace = await p.brain.complete_refined(
-                    messages, max_tokens=body.max_tokens, temperature=body.temperature
+                    messages, max_tokens=body.max_tokens, temperature=body.temperature,
+                    on_step=on_step,
                 )
             else:
                 reply = await p.brain.complete(
-                    messages, max_tokens=body.max_tokens, temperature=body.temperature
+                    messages, max_tokens=body.max_tokens, temperature=body.temperature,
+                    on_step=on_step,
                 )
         except Exception as e:
+            if _live_run["run_id"] == run_id:
+                _live_run["active"] = False
             raise HTTPException(502, f"Todos los proveedores fallaron: {str(e)[:200]}")
 
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        if _live_run["run_id"] == run_id:
+            _live_run["active"] = False
+        _record_response_time(p.name, elapsed_ms)
+
         st = p.brain.status()
-        result = {"reply": reply, "provider": st["active"], "profile": p.name}
+        result = {"reply": reply, "provider": st["active"], "profile": p.name, "elapsed_ms": elapsed_ms}
         if trace:
             result["trace"] = trace
 

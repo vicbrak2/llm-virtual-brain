@@ -55,20 +55,23 @@ class Provider:
         payload.update(self.extra_body)
         return payload
 
-    def parse_response(self, response_json: Dict) -> str:
-        """Extraer contenido. Modelos de razonamiento (Cerebras) pueden dejar
-        content vacío y todo en reasoning — se acepta cualquiera de los dos."""
+    def parse_response(self, response_json: Dict) -> tuple:
+        """Extraer (contenido, truncado). Modelos de razonamiento (Cerebras)
+        pueden dejar content vacío y todo en reasoning — se acepta cualquiera
+        de los dos. `truncado=True` cuando finish_reason=="length": el
+        llamador decide si continuar la generación o rotar de provider."""
         try:
             choice = response_json["choices"][0]
             msg = choice["message"]
             content = msg.get("content") or ""
+            truncated = choice.get("finish_reason") == "length"
             if content.strip():
-                return content
+                return content, truncated
             # Sin content y cortado por límite de tokens: el reasoning quedó a
             # medias y no es una respuesta — mejor fallar y rotar de provider.
-            if choice.get("finish_reason") == "length":
+            if truncated:
                 raise ValueError("truncado por max_tokens en pleno razonamiento (sin content)")
-            return msg.get("reasoning") or ""
+            return msg.get("reasoning") or "", False
         except (KeyError, IndexError, TypeError) as e:
             raise ValueError(f"Formato de respuesta inválido: {e}")
 
