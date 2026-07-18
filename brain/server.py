@@ -23,14 +23,25 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
+import asyncio
+from datetime import datetime
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# Cargar .env del repo y de brain/ antes de leer cualquier os.getenv.
+# brain/.env pisa al del repo si repiten claves (es el más específico).
+_PKG_DIR = Path(__file__).resolve().parent
+load_dotenv(_PKG_DIR.parent / ".env")
+load_dotenv(_PKG_DIR / ".env", override=True)
+
 from .config import load_config_from_yaml, _substitute_env_vars
 from .core import Brain
+from .connectors import (handle_instagram_leads_webhook, sync_meta_ads_insights,
+                         sync_instagram_dms, flush_pending_leads)
 
 MAX_DOC_CHARS = 60_000          # límite por documento subido
 CONTEXT_BUDGET_CHARS = 12_000   # presupuesto de contexto de documentos por chat
@@ -526,6 +537,11 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
 
         asyncio.get_event_loop().create_task(warm())
 
+        # Refresco automático de tokens Meta/IG/Threads (una pasada al arrancar
+        # y luego diaria; los renovados quedan en data/tokens.json)
+        from .tokens import refresh_loop
+        asyncio.get_event_loop().create_task(refresh_loop())
+
     @app.get("/api/status")
     async def status():
         p = profiles[state["active"]]
@@ -832,6 +848,93 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                 sheet_result = f"error: {str(e)[:120]}"
 
         return {"registered": entry, "sheets": sheet_result, "profile": p.name}
+
+    # ───────── WEBHOOKS & PERIODIC TASKS (Meta + Instagram + Google Sheets) ─────────
+
+    @app.get("/webhooks/instagram/leads")
+    async def verify_instagram_webhook(
+            hub_mode: str = Query(None, alias="hub.mode"),
+            hub_challenge: str = Query(None, alias="hub.challenge"),
+            hub_verify_token: str = Query(None, alias="hub.verify_token")):
+        """Verifica el webhook de Meta (Meta envía hub.mode/hub.challenge/hub.verify_token)."""
+        verify_token = os.getenv("WEBHOOK_VERIFY_TOKEN", "").strip()
+        if not verify_token:
+            raise HTTPException(400, "WEBHOOK_VERIFY_TOKEN no configurado")
+
+        if hub_mode == "subscribe" and hub_verify_token == verify_token:
+            return int(hub_challenge)
+
+        raise HTTPException(403, "Token de verificación inválido")
+
+    @app.post("/webhooks/instagram/leads")
+    async def receive_instagram_leads(body: Dict, background_tasks: BackgroundTasks):
+        """Recibe leads de Instagram Lead Ads en tiempo real.
+
+        Meta enviará aquí un JSON con estructura:
+        {
+          "entry": [{
+            "leadgen": [{
+              "created_time": unix_timestamp,
+              "field_data": [
+                {"name": "full_name", "values": ["Juan"]},
+                {"name": "phone_number", "values": ["+56..."]},
+                ...
+              ]
+            }]
+          }]
+        }
+        """
+        if not body:
+            return {"status": "ok"}
+
+        # Procesar en background para no bloquear la respuesta a Meta
+        background_tasks.add_task(handle_instagram_leads_webhook, body)
+
+        return {"status": "received"}
+
+    # ───────── PERIODIC TASKS (sincronización cada 6h / 15 min) ─────────
+
+    _sync_state = {"ads_last": 0, "dms_last": 0}
+
+    @app.on_event("startup")
+    async def schedule_periodic_syncs():
+        """Inicia tasks periódicas de sincronización."""
+        async def sync_loop():
+            while True:
+                now = time.time()
+
+                # Meta Ads: cada 6 horas (21600 seg)
+                if now - _sync_state["ads_last"] >= 21600:
+                    try:
+                        success = await sync_meta_ads_insights()
+                        if success:
+                            _sync_state["ads_last"] = now
+                            print(f"[periodic] Meta Ads synced at {datetime.now().isoformat()}")
+                    except Exception as e:
+                        print(f"[periodic] Meta Ads sync error: {str(e)[:100]}")
+
+                # Instagram DMs: cada 15 minutos (900 seg)
+                if now - _sync_state["dms_last"] >= 900:
+                    try:
+                        success = await sync_instagram_dms()
+                        if success:
+                            _sync_state["dms_last"] = now
+                            print(f"[periodic] Instagram DMs synced at {datetime.now().isoformat()}")
+                    except Exception as e:
+                        print(f"[periodic] Instagram DMs sync error: {str(e)[:100]}")
+
+                # Leads encolados (Sheets caído en su momento): reintentar cada 15 min
+                if now - _sync_state.get("pending_last", 0) >= 900:
+                    try:
+                        await flush_pending_leads()
+                        _sync_state["pending_last"] = now
+                    except Exception as e:
+                        print(f"[periodic] flush pending leads error: {str(e)[:100]}")
+
+                await asyncio.sleep(60)  # Chequea cada 60 segundos
+
+        # Lanzar la task de fondo
+        asyncio.create_task(sync_loop())
 
     return app
 

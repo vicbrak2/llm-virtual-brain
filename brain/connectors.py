@@ -21,12 +21,16 @@ Soportados:
         pages_read_engagement); toma la primera página de /me/accounts.
 """
 
+import json
 import os
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
+
+from .tokens import get_token
 
 IG_GRAPH = "https://graph.instagram.com/v23.0"
 CACHE_TTL_SECONDS = 600          # 10 min: métricas sociales no cambian por mensaje
@@ -249,7 +253,7 @@ async def fetch_instagram_context() -> Optional[str]:
     """Snapshot completo de la cuenta de Instagram para el contexto del LLM:
     perfil, insights de cuenta (si hay permiso), últimas publicaciones con
     métricas (+ insights por post), agregados y resumen histórico mensual."""
-    token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+    token = get_token("INSTAGRAM_ACCESS_TOKEN")
     if not token:
         _set_status("instagram", "pendiente", "falta INSTAGRAM_ACCESS_TOKEN en .env")
         return None
@@ -398,7 +402,7 @@ async def fetch_meta_ads_context() -> Optional[str]:
     Credenciales vía env: META_ADS_ACCESS_TOKEN (token de Facebook Login con
     `ads_read`) y META_AD_ACCOUNT_ID (con o sin prefijo act_).
     """
-    token = os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
+    token = get_token("META_ADS_ACCESS_TOKEN")
     account = os.getenv("META_AD_ACCOUNT_ID", "").strip()
     if not token or not account:
         _set_status("meta_ads", "pendiente", "faltan META_ADS_ACCESS_TOKEN / META_AD_ACCOUNT_ID en .env")
@@ -476,7 +480,7 @@ async def fetch_facebook_page_context() -> Optional[str]:
     pages_read_engagement ya concedidos junto con ads_read).
     """
     token = os.getenv("FACEBOOK_PAGE_TOKEN", "").strip() or \
-        os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
+        get_token("META_ADS_ACCESS_TOKEN")
     if not token:
         _set_status("facebook_page", "pendiente", "falta META_ADS_ACCESS_TOKEN en .env")
         return None
@@ -545,9 +549,205 @@ async def fetch_facebook_page_context() -> Optional[str]:
     return result
 
 
+async def fetch_whatsapp_context() -> Optional[str]:
+    """WhatsApp Business (Cloud API): números, calidad, plantillas y
+    analítica de conversaciones de los últimos 28 días.
+
+    Credenciales vía env: WHATSAPP_BUSINESS_ACCOUNT_ID (WABA) y
+    WHATSAPP_ACCESS_TOKEN (si falta, reutiliza META_ADS_ACCESS_TOKEN con
+    scope whatsapp_business_management)."""
+    token = get_token("WHATSAPP_ACCESS_TOKEN") or get_token("META_ADS_ACCESS_TOKEN")
+    waba = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "").strip()
+    if not token or not waba:
+        _set_status("whatsapp", "pendiente",
+                    "faltan WHATSAPP_BUSINESS_ACCOUNT_ID (Business Manager → WhatsApp) "
+                    "y/o token con whatsapp_business_management")
+        return None
+    cached = _cached("whatsapp")
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            info = await _fb_get(client, waba, fields="name,message_template_namespace",
+                                 access_token=token)
+            phones = (await _fb_get(client, f"{waba}/phone_numbers",
+                                    fields="display_phone_number,verified_name,"
+                                           "quality_rating,code_verification_status",
+                                    access_token=token)).get("data", [])
+            templates = (await _fb_get(client, f"{waba}/message_templates",
+                                       fields="name,status,category", limit="15",
+                                       access_token=token)).get("data", [])
+            analytics_lines: List[str] = []
+            try:
+                now = int(time.time())
+                d = await _fb_get(client, waba,
+                                  fields=f"analytics.start({now - 28*86400}).end({now}).granularity(MONTH)",
+                                  access_token=token)
+                pts = ((d.get("analytics") or {}).get("data_points")) or []
+                sent = sum(p.get("sent", 0) for p in pts)
+                delivered = sum(p.get("delivered", 0) for p in pts)
+                if sent or delivered:
+                    analytics_lines.append(f"- Mensajes últimos 28 días: {sent} enviados, {delivered} entregados")
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[connectors] whatsapp fetch falló: {str(e)[:200]}")
+        _set_status("whatsapp", "error", str(e)[:120])
+        _store("whatsapp", None)
+        return None
+
+    lines = [f"WhatsApp Business: {info.get('name', waba)}"]
+    for p in phones:
+        lines.append(f"- Número: {p.get('display_phone_number', '?')} "
+                     f"({p.get('verified_name', '?')}) — calidad {p.get('quality_rating', '?')}")
+    if templates:
+        aprobadas = [t for t in templates if t.get("status") == "APPROVED"]
+        lines.append(f"- Plantillas: {len(aprobadas)} aprobadas de {len(templates)} "
+                     f"({', '.join(t['name'] for t in aprobadas[:6])})")
+    else:
+        lines.append("- Sin plantillas de mensaje creadas aún")
+    lines += analytics_lines
+    result = "\n".join(lines)
+    _set_status("whatsapp", "ok", f"{len(phones)} número(s), {len(templates)} plantilla(s)")
+    _store("whatsapp", result)
+    return result
+
+
+async def fetch_messenger_context() -> Optional[str]:
+    """Bandeja de Messenger de la página de Facebook: quién espera respuesta.
+    Reutiliza META_ADS_ACCESS_TOKEN; necesita el scope pages_messaging
+    (el page token se obtiene de /me/accounts)."""
+    token = get_token("META_ADS_ACCESS_TOKEN")
+    if not token:
+        _set_status("messenger", "pendiente", "falta META_ADS_ACCESS_TOKEN en .env")
+        return None
+    cached = _cached("messenger")
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            accounts = await _fb_get(client, "me/accounts",
+                                     fields="id,name,access_token", access_token=token)
+            pages = accounts.get("data", [])
+            if not pages:
+                _set_status("messenger", "error", "el token no administra ninguna página")
+                _store("messenger", None)
+                return None
+            page = pages[0]
+            page_token = page.get("access_token") or token
+            data = await _fb_get(client, f"{page['id']}/conversations",
+                                 platform="messenger",
+                                 fields="participants,updated_time,"
+                                        "messages.limit(2){from,created_time,message}",
+                                 limit="15", access_token=page_token)
+    except Exception as e:
+        detail = str(e)[:150]
+        if ("pages_messaging" in detail or "permission" in detail.lower()
+                or "(#200)" in detail or "403" in detail):
+            _set_status("messenger", "pendiente",
+                        "el token no tiene el scope pages_messaging — regenerarlo agregándolo")
+        else:
+            print(f"[connectors] messenger fetch falló: {detail}")
+            _set_status("messenger", "error", detail[:120])
+        _store("messenger", None)
+        return None
+
+    convs = data.get("data", [])
+    page_name = page.get("name", "página")
+    if not convs:
+        result = f"Messenger ({page_name}): sin conversaciones registradas."
+        _set_status("messenger", "ok", "0 conversaciones")
+        _store("messenger", result)
+        return result
+    pendientes = 0
+    lines: List[str] = []
+    for conv in convs:
+        parts = (conv.get("participants") or {}).get("data", [])
+        other = next((p.get("name", "?") for p in parts
+                      if p.get("id") != page["id"]), "?")
+        msgs = (conv.get("messages") or {}).get("data", [])
+        if not msgs:
+            continue
+        last = msgs[0]
+        fecha = (last.get("created_time") or "")[:10]
+        texto = (last.get("message") or "").replace("\n", " ")[:80]
+        if (last.get("from") or {}).get("id") == page["id"]:
+            estado = "respondido por el equipo"
+        else:
+            estado = "ESPERANDO RESPUESTA del equipo"
+            pendientes += 1
+        lines.append(f"- {other} [último mensaje {fecha}]: \"{texto}\" ({estado})")
+    lines.insert(0, f"Messenger ({page_name}) — {pendientes} conversaciones esperando respuesta:")
+    result = "\n".join(lines)
+    _set_status("messenger", "ok", f"{len(convs)} conversaciones, {pendientes} pendientes")
+    _store("messenger", result)
+    return result
+
+
+TH_GRAPH = "https://graph.threads.net/v1.0"
+
+
+async def fetch_threads_context() -> Optional[str]:
+    """Perfil y últimos posts de Threads con vistas/likes si hay permiso de insights.
+    Credenciales vía env: THREADS_ACCESS_TOKEN (Threads API, scope threads_basic
+    + threads_manage_insights opcional)."""
+    token = get_token("THREADS_ACCESS_TOKEN")
+    if not token:
+        _set_status("threads", "pendiente",
+                    "falta THREADS_ACCESS_TOKEN (caso de uso 'API de Threads' → generar token)")
+        return None
+    cached = _cached("threads")
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            r = await client.get(f"{TH_GRAPH}/me", params={
+                "fields": "username,threads_biography", "access_token": token})
+            r.raise_for_status()
+            prof = r.json()
+            r = await client.get(f"{TH_GRAPH}/me/threads", params={
+                "fields": "id,text,timestamp,permalink", "limit": "10",
+                "access_token": token})
+            r.raise_for_status()
+            posts = r.json().get("data", [])
+            post_lines: List[str] = []
+            for t in posts:
+                extra = ""
+                try:
+                    ri = await client.get(f"{TH_GRAPH}/{t['id']}/insights", params={
+                        "metric": "views,likes,replies,reposts", "access_token": token})
+                    ri.raise_for_status()
+                    ins = {x["name"]: (x.get("values") or [{}])[0].get("value", 0)
+                           for x in ri.json().get("data", [])}
+                    if ins:
+                        extra = f" | {ins.get('views', 0)} vistas, {ins.get('likes', 0)} likes, " \
+                                f"{ins.get('replies', 0)} respuestas"
+                except Exception:
+                    pass
+                texto = (t.get("text") or "").replace("\n", " ")[:80]
+                post_lines.append(f"- [{(t.get('timestamp') or '')[:10]}] \"{texto}\"{extra} "
+                                  f"→ {t.get('permalink', '')}")
+    except Exception as e:
+        print(f"[connectors] threads fetch falló: {str(e)[:200]}")
+        _set_status("threads", "error", str(e)[:120])
+        _store("threads", None)
+        return None
+
+    lines = [f"Threads: @{prof.get('username', '?')}"]
+    if post_lines:
+        lines.append(f"Últimos {len(post_lines)} posts:")
+        lines += post_lines
+    else:
+        lines.append("Sin posts publicados aún.")
+    result = "\n".join(lines)
+    _set_status("threads", "ok", f"{len(post_lines)} posts")
+    _store("threads", result)
+    return result
+
+
 async def _meta_token_expiry() -> Optional[int]:
     """Días restantes del META_ADS_ACCESS_TOKEN (via debug_token; cache 1h)."""
-    token = os.getenv("META_ADS_ACCESS_TOKEN", "").strip()
+    token = get_token("META_ADS_ACCESS_TOKEN")
     if not token:
         return None
     hit = _cache.get("meta_token_expiry")
@@ -604,6 +804,331 @@ async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
             results[name] = await fetch_meta_ads_context()
         elif c.get("type") == "facebook_page":
             results[name] = await fetch_facebook_page_context()
+        elif c.get("type") == "whatsapp":
+            results[name] = await fetch_whatsapp_context()
+        elif c.get("type") == "messenger":
+            results[name] = await fetch_messenger_context()
+        elif c.get("type") == "threads":
+            results[name] = await fetch_threads_context()
         else:
             results[name] = None
     return results
+
+
+# ============ WEBHOOK HANDLERS & GOOGLE SHEETS INTEGRATION ============
+
+# Cola local anti-pérdida: si Sheets no responde, los leads quedan aquí
+# y se reintentan en el loop periódico (cada 15 min).
+PENDING_LEADS_FILE = Path(__file__).resolve().parent / "pending_leads.jsonl"
+
+# Encabezados por pestaña: el GAS crea la pestaña con estos headers si no existe.
+TAB_HEADERS = {
+    "LEADS_INSTAGRAM": ["Timestamp", "Nombre", "Teléfono", "Email", "Interés",
+                        "Ciudad", "Score", "Status", "Asignada a", "Fecha Contacto"],
+    "CONTACTOS_DIRECTOS": ["Timestamp", "Nombre", "Mensaje", "Plataforma",
+                           "Leído", "Respondido", "Asignada a"],
+    "CAMPAÑAS_ADS": ["Fecha", "Campaña", "Objetivo", "Spend ($)", "Impressiones",
+                     "Clicks", "CTR (%)", "Conversiones", "ROAS", "Status"],
+}
+
+
+async def _append_to_gsheet(sheet_id: str, tab: str, values: List[List]) -> bool:
+    """Agregar filas a una pestaña de Google Sheets vía GAS Web App.
+
+    La API de Sheets no permite escrituras con API key, así que el append
+    va por un Google Apps Script propio (env LEADS_GAS_URL) que abre el
+    spreadsheet por id y agrega las filas. Ver docs/GAS_LEADS_SNIPPET.gs.
+    """
+    gas_url = os.getenv("LEADS_GAS_URL", "").strip()
+    if not gas_url:
+        print("[gsheet] falta LEADS_GAS_URL en .env (ver docs/GAS_LEADS_SNIPPET.gs)")
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            r = await client.post(gas_url, json={
+                "action": "appendRows",
+                "spreadsheetId": sheet_id,
+                "sheet": tab,
+                "headers": TAB_HEADERS.get(tab, []),
+                "rows": values,
+            })
+            r.raise_for_status()
+            data = r.json()
+            if data.get("ok") and not data.get("error"):
+                return True
+            print(f"[gsheet] GAS respondió error: {str(data)[:120]}")
+            return False
+    except Exception as e:
+        print(f"[gsheet] append falló: {str(e)[:120]}")
+        return False
+
+
+def _queue_pending_lead(tab: str, row: List) -> None:
+    """Guarda un lead que no pudo escribirse en Sheets para reintentarlo después."""
+    try:
+        with open(PENDING_LEADS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"tab": tab, "row": row}, ensure_ascii=False) + "\n")
+        print(f"[gsheet] lead encolado en {PENDING_LEADS_FILE.name} (se reintenta cada 15 min)")
+    except Exception as e:
+        print(f"[gsheet] ERROR CRÍTICO: no se pudo encolar lead: {str(e)[:120]}")
+
+
+async def flush_pending_leads() -> int:
+    """Reintenta los leads pendientes de la cola local. Devuelve cuántos se insertaron."""
+    if not PENDING_LEADS_FILE.exists():
+        return 0
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+    try:
+        lines = PENDING_LEADS_FILE.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return 0
+    if not lines:
+        return 0
+
+    remaining, flushed = [], 0
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue  # línea corrupta: descartar
+        if await _append_to_gsheet(sheet_id, item["tab"], [item["row"]]):
+            flushed += 1
+        else:
+            remaining.append(line)
+
+    PENDING_LEADS_FILE.write_text(
+        "\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+    if flushed:
+        print(f"[gsheet] cola vaciada: {flushed} lead(s) insertados, {len(remaining)} pendientes")
+    return flushed
+
+
+async def _fetch_lead_details(leadgen_id: str) -> Optional[Dict]:
+    """Meta solo envía leadgen_id en el webhook real: los datos del formulario
+    se obtienen con GET /{leadgen_id} (requiere permiso leads_retrieval)."""
+    token = get_token("META_ADS_ACCESS_TOKEN")
+    if not token:
+        print("[webhook] sin META_ADS_ACCESS_TOKEN para leer el lead")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://graph.facebook.com/v23.0/{leadgen_id}",
+                params={"fields": "field_data,created_time", "access_token": token})
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        print(f"[webhook] fetch de lead {leadgen_id} falló: {str(e)[:120]}")
+        return None
+
+
+async def handle_instagram_leads_webhook(payload: Dict) -> bool:
+    """Procesa webhook de Instagram Lead Ads.
+
+    Soporta ambos formatos:
+    - Real de Meta: entry[].changes[] con field="leadgen" y value.leadgen_id
+      (los datos del formulario se buscan vía API con leads_retrieval).
+    - De prueba/directo: entry[].leadgen[] con field_data inline.
+
+    Extrae datos del formulario, calcula score, inserta en Google Sheets.
+    NO responde automáticamente; solo captura y clasifica.
+    """
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+    if not sheet_id:
+        print("[webhook] GOOGLE_SHEETS_ID no configurado")
+        return False
+
+    for entry in payload.get("entry", []):
+        # Formato real de Meta: changes[] con leadgen_id → fetch vía API
+        leadgens = list(entry.get("leadgen", []))
+        for change in entry.get("changes", []):
+            if change.get("field") != "leadgen":
+                continue
+            leadgen_id = str(change.get("value", {}).get("leadgen_id", ""))
+            if not leadgen_id:
+                continue
+            detail = await _fetch_lead_details(leadgen_id)
+            if detail:
+                leadgens.append(detail)
+            else:
+                # Sin datos no se puede armar la fila; guardar el id para rescate manual
+                _queue_pending_lead("LEADS_INSTAGRAM", [
+                    time.strftime("%Y-%m-%d %H:%M:%S"),
+                    f"(pendiente fetch lead {leadgen_id})",
+                    "—", "—", "—", "—", 0, "🆕", "", ""])
+
+        for leadgen in leadgens:
+            lead_data = {}
+            for field in leadgen.get("field_data", []):
+                name = field.get("name", "").lower()
+                values = field.get("values", [])
+                if values:
+                    lead_data[name] = values[0]
+
+            # Calcular score: +1 por teléfono, +1 por email
+            score = 0
+            if lead_data.get("phone_number"):
+                score += 1
+            if lead_data.get("email"):
+                score += 1
+
+            # Preparar fila para Sheets (created_time puede ser unix int o ISO string)
+            created = leadgen.get("created_time", time.time())
+            try:
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(created)))
+            except (TypeError, ValueError):
+                timestamp = str(created)[:19].replace("T", " ")
+            row = [
+                timestamp,
+                lead_data.get("full_name", "—"),
+                lead_data.get("phone_number", "—"),
+                lead_data.get("email", "—"),
+                lead_data.get("interested_in", "—"),
+                lead_data.get("city", "—"),
+                score,
+                "🆕",  # Status
+                "",    # Asignada a (manual)
+                ""     # Fecha Contacto (manual)
+            ]
+
+            # Insertar en Sheets; si falla, encolar localmente (nunca perder un lead)
+            success = await _append_to_gsheet(sheet_id, "LEADS_INSTAGRAM", [row])
+            if success:
+                print(f"[webhook] Lead capturado: {lead_data.get('full_name', '?')} "
+                      f"({lead_data.get('interested_in', '?')})")
+            else:
+                _queue_pending_lead("LEADS_INSTAGRAM", row)
+            # Notificar al equipo aunque Sheets falle: el lead existe igual
+            await _notify_team_lead(lead_data)
+
+    return True
+
+
+async def _notify_team_lead(lead_data: Dict) -> None:
+    """Envía notificación por email/Slack sobre nuevo lead."""
+    name = lead_data.get("full_name", "Desconocido")
+    interest = lead_data.get("interested_in", "—")
+    phone = lead_data.get("phone_number", "—")
+
+    message = f"📩 Nuevo lead de Instagram: {name} ({interest})\nTeléfono: {phone}"
+
+    # Email notification
+    emails = os.getenv("NOTIFICATION_EMAIL", "").split(",")
+    if emails and emails[0].strip():
+        print(f"[notify] Email sería enviado a: {emails}")
+        # En producción: usar smtplib o SendGrid
+        # send_email(emails, f"Nuevo lead: {name}", message)
+
+    # Slack notification (si está configurado)
+    slack_hook = os.getenv("SLACK_WEBHOOK", "").strip()
+    if slack_hook and "YOUR/SLACK" not in slack_hook:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(slack_hook, json={"text": message})
+                print(f"[notify] Slack enviado")
+        except Exception as e:
+            print(f"[notify] Slack falló: {str(e)[:80]}")
+
+
+async def sync_meta_ads_insights() -> bool:
+    """Sincroniza métricas de Meta Ads cada 6 horas.
+
+    Si ROAS < 2, marca como ⚠️ Revisar en Sheets.
+    """
+    token = get_token("META_ADS_ACCESS_TOKEN")
+    account = os.getenv("META_AD_ACCOUNT_ID", "").strip()
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+
+    if not all([token, account, sheet_id]):
+        print("[ads_sync] Faltan credenciales")
+        return False
+
+    if not account.startswith("act_"):
+        account = f"act_{account}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # Obtener insights de campañas
+            ins = await _fb_get(client, f"{account}/insights",
+                               level="campaign", date_preset="last_7d",
+                               fields="campaign_id,campaign_name,spend,reach,"
+                                      "impressions,clicks,ctr,actions",
+                               access_token=token)
+
+            campaigns = ins.get("data", [])
+            timestamp = time.strftime("%Y-%m-%d")
+
+            for camp in campaigns:
+                spend = float(camp.get("spend", 0)) / 100  # Centavos a USD
+                actions = camp.get("actions", [])
+                revenue = sum(float(a.get("value", 0)) for a in actions if a.get("action_type") == "purchase")
+                roas = (revenue / spend) if spend > 0 else 0
+
+                status = "✅" if roas >= 2 else ("⚠️ Revisar" if roas >= 1.5 else "❌ Baja")
+
+                row = [
+                    timestamp,
+                    camp.get("campaign_name", "?"),
+                    "CONVERSIONS",
+                    f"{spend:.2f}",
+                    camp.get("impressions", "?"),
+                    camp.get("clicks", "?"),
+                    camp.get("ctr", "?"),
+                    len(actions),
+                    f"{roas:.2f}",
+                    status
+                ]
+
+                await _append_to_gsheet(sheet_id, "CAMPAÑAS_ADS", [row])
+                print(f"[ads_sync] {camp.get('campaign_name', '?')}: ROAS {roas:.2f} ({status})")
+
+            return True
+    except Exception as e:
+        print(f"[ads_sync] Error: {str(e)[:120]}")
+        return False
+
+
+async def sync_instagram_dms() -> bool:
+    """Sincroniza DMs de Instagram cada 15 minutos (lectura sin respuesta)."""
+    token = get_token("INSTAGRAM_ACCESS_TOKEN")
+    ig_user_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "").strip()
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+
+    if not all([token, ig_user_id, sheet_id]):
+        print("[dm_sync] Faltan credenciales")
+        return False
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Obtener conversaciones de Instagram
+            data = await _get(client, f"{ig_user_id}/conversations",
+                            fields="id,name,last_message,updated_time,participants",
+                            access_token=token)
+
+            conversations = data.get("data", [])
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+            for conv in conversations:
+                last_msg = conv.get("last_message", {})
+                if not last_msg:
+                    continue
+
+                row = [
+                    timestamp,
+                    conv.get("name", "Desconocido"),
+                    last_msg.get("message", "—"),
+                    "Instagram DM",
+                    "✅",  # read
+                    "❌",  # no respondido aún (manual)
+                    ""     # asignada a (manual)
+                ]
+
+                await _append_to_gsheet(sheet_id, "CONTACTOS_DIRECTOS", [row])
+
+            if conversations:
+                print(f"[dm_sync] {len(conversations)} conversaciones sincronizadas")
+            return True
+
+    except Exception as e:
+        print(f"[dm_sync] Error: {str(e)[:120]}")
+        return False
