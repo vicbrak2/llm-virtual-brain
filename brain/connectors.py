@@ -80,11 +80,18 @@ async def _media_insights(client: httpx.AsyncClient, token: str, media_id: str,
 _HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
 
 
-def _hashtag_performance(media: List[Dict], insights_by_id: Dict[str, Dict],
-                         min_posts: int = 2, top_n: int = 8) -> List[str]:
-    """Agrega alcance/likes/guardados por hashtag a partir de los captions
-    completos de `media`. Solo reporta hashtags usados en >= min_posts
-    publicaciones (con menos, el promedio es ruido, no señal)."""
+def _hashtag_score(s: Dict[str, float]) -> float:
+    # Alcance promedio si hay datos de insights; si no, engagement (likes+comentarios)
+    if s["con_alcance"]:
+        return s["reach"] / s["con_alcance"]
+    return (s["likes"] + s["comments"]) / s["posts"]
+
+
+def _hashtag_stats(media: List[Dict], insights_by_id: Dict[str, Dict],
+                   min_posts: int = 2) -> Dict[str, Dict[str, float]]:
+    """Agrega alcance/likes/comentarios/guardados por hashtag a partir de los
+    captions completos de `media`. Solo devuelve hashtags usados en
+    >= min_posts publicaciones (con menos, el promedio es ruido, no señal)."""
     stats: Dict[str, Dict[str, float]] = defaultdict(
         lambda: {"posts": 0, "likes": 0, "comments": 0, "reach": 0, "saved": 0, "con_alcance": 0})
 
@@ -108,17 +115,17 @@ def _hashtag_performance(media: List[Dict], insights_by_id: Dict[str, Dict],
                 s["con_alcance"] += 1
             s["saved"] += saved
 
-    calificables = {tag: s for tag, s in stats.items() if s["posts"] >= min_posts}
+    return {tag: s for tag, s in stats.items() if s["posts"] >= min_posts}
+
+
+def _hashtag_performance(media: List[Dict], insights_by_id: Dict[str, Dict],
+                         min_posts: int = 2, top_n: int = 8) -> List[str]:
+    """Texto formateado para el contexto del chat (ver _hashtag_stats)."""
+    calificables = _hashtag_stats(media, insights_by_id, min_posts)
     if not calificables:
         return []
 
-    def score(s: Dict[str, float]) -> float:
-        # Alcance promedio si hay datos de insights; si no, engagement (likes+comentarios)
-        if s["con_alcance"]:
-            return s["reach"] / s["con_alcance"]
-        return (s["likes"] + s["comments"]) / s["posts"]
-
-    ranking = sorted(calificables.items(), key=lambda kv: score(kv[1]), reverse=True)[:top_n]
+    ranking = sorted(calificables.items(), key=lambda kv: _hashtag_score(kv[1]), reverse=True)[:top_n]
 
     lines = [f"Rendimiento por hashtag (usados en {min_posts}+ de las publicaciones analizadas):"]
     for tag, s in ranking:
@@ -890,6 +897,8 @@ TAB_HEADERS = {
                            "Leído", "Respondido", "Asignada a"],
     "CAMPAÑAS_ADS": ["Fecha", "Campaña", "Objetivo", "Spend ($)", "Impressiones",
                      "Clicks", "CTR (%)", "Conversiones", "ROAS", "Status"],
+    "HASHTAGS": ["Fecha", "Hashtag", "Publicaciones", "Alcance/post",
+                "Likes/post", "Comentarios/post", "Guardados/post"],
 }
 
 
@@ -1207,4 +1216,58 @@ async def sync_instagram_dms() -> bool:
 
     except Exception as e:
         print(f"[dm_sync] Error: {str(e)[:120]}")
+        return False
+
+
+async def sync_hashtag_performance() -> bool:
+    """Guarda un snapshot diario del rendimiento por hashtag en la pestaña
+    HASHTAGS del Sheet, para que quede como historial (no solo disponible
+    al vuelo en el chat). Reusa la misma agregación que ve el agente."""
+    token = get_token("INSTAGRAM_ACCESS_TOKEN")
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+
+    if not all([token, sheet_id]):
+        print("[hashtag_sync] Faltan credenciales")
+        return False
+
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            page = await _get(client, "me/media",
+                              fields="id,caption,like_count,comments_count",
+                              limit=str(MEDIA_LIMIT), access_token=token)
+            recientes = page.get("data", [])
+
+            insights_by_id: Dict[str, Dict] = {}
+            for m in recientes[:INSIGHTS_MEDIA]:
+                ins = await _media_insights(client, token, m["id"], m.get("media_type", ""))
+                if ins:
+                    insights_by_id[m["id"]] = ins
+
+        stats = _hashtag_stats(recientes, insights_by_id)
+        if not stats:
+            print("[hashtag_sync] sin hashtags con datos suficientes (min 2 posts)")
+            return True
+
+        fecha = time.strftime("%Y-%m-%d")
+        ranking = sorted(stats.items(), key=lambda kv: _hashtag_score(kv[1]), reverse=True)
+        rows = []
+        for tag, s in ranking:
+            n = s["posts"]
+            rows.append([
+                fecha,
+                f"#{tag}",
+                n,
+                round(s["reach"] / s["con_alcance"], 0) if s["con_alcance"] else "",
+                round(s["likes"] / n, 1),
+                round(s["comments"] / n, 1),
+                round(s["saved"] / n, 1) if s["saved"] else "",
+            ])
+
+        if await _append_to_gsheet(sheet_id, "HASHTAGS", rows):
+            print(f"[hashtag_sync] {len(rows)} hashtag(s) guardados")
+            return True
+        return False
+
+    except Exception as e:
+        print(f"[hashtag_sync] Error: {str(e)[:120]}")
         return False

@@ -45,7 +45,7 @@ except ImportError:
 from .config import load_config_from_yaml, _substitute_env_vars
 from .core import Brain
 from .connectors import (handle_instagram_leads_webhook, sync_meta_ads_insights,
-                         sync_instagram_dms, flush_pending_leads)
+                         sync_instagram_dms, flush_pending_leads, sync_hashtag_performance)
 
 MAX_DOC_CHARS = 60_000          # límite por documento subido
 CONTEXT_BUDGET_CHARS = 12_000   # presupuesto de contexto de documentos por chat
@@ -934,6 +934,16 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
                         _sync_state["pending_last"] = now
                     except Exception as e:
                         print(f"[periodic] flush pending leads error: {str(e)[:100]}")
+
+                # Rendimiento por hashtag: snapshot diario (86400 seg)
+                if now - _sync_state.get("hashtags_last", 0) >= 86400:
+                    try:
+                        success = await sync_hashtag_performance()
+                        if success:
+                            _sync_state["hashtags_last"] = now
+                            print(f"[periodic] Hashtags synced at {datetime.now().isoformat()}")
+                    except Exception as e:
+                        print(f"[periodic] Hashtag sync error: {str(e)[:100]}")
 
                 await asyncio.sleep(60)  # Chequea cada 60 segundos
 
