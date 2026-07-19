@@ -12,6 +12,7 @@ providers:
   model: nvidia/nemotron-3-super-120b-a12b
 - name: cerebras
   api_key: ${CEREBRAS_API_KEY}
+  model: gemma-4-31b
   extra_body:
     reasoning_effort: high
 - name: hf
