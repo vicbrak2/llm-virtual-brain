@@ -59,6 +59,47 @@ _live_run: Dict = {"run_id": 0, "active": False, "profile": None, "steps": [], "
 _response_times_path: Optional[Path] = None   # se fija en create_app()
 _response_times: Dict[str, List[int]] = {}    # perfil → [ms, ms, ...] (recientes primero)
 
+QAMILUNA_CONTENT_KEYWORDS = (
+    "caption", "captions", "post", "reel", "reels", "carrusel", "carruseles",
+    "historia", "historias", "whatsapp", "copy", "copys", "contenido",
+    "publicacion", "publicación", "guion", "guión",
+)
+
+QAMILUNA_CONTENT_GUARDRAIL = """INSTRUCCION FINAL PARA CONTENIDO QAMILUNA:
+La respuesta es un borrador para revision humana. En captions, Reels, carruseles,
+historias o WhatsApp NO uses estas frases ni variantes: brillar, princesa, reina,
+perfecto, gran dia, look unico, verdaderamente especial, no te pierdas la oportunidad.
+Si el contenido es educativo, cada opcion debe enseñar una accion o criterio concreto.
+Usa marcadores editables cuando falten datos: [PRECIO], [FECHA], [CUPO], [LINK],
+[SERVICIO]."""
+
+
+def _is_qamiluna_content_request(profile_name: str, message: str) -> bool:
+    if profile_name != "qamiluna_team":
+        return False
+    text = (message or "").lower()
+    return any(keyword in text for keyword in QAMILUNA_CONTENT_KEYWORDS)
+
+
+def _sanitize_qamiluna_content_reply(text: str) -> str:
+    replacements = {
+        r"\bno te pierdas la oportunidad(?: de [^.!?]*)?": "escribenos para revisar disponibilidad",
+        r"\bgran d[ií]a\b": "dia de la boda",
+        r"\bd[ií]a especial\b": "boda",
+        r"\bbrillar\b": "sentirte comoda",
+        r"\bprincesa\b": "tu misma",
+        r"\breina\b": "tu misma",
+        r"\bperfect[oa]s?\b": "bien definido",
+        r"\blook [uú]nico\b": "resultado pensado para ti",
+        r"\bverdaderamente especial\b": "bien preparado",
+        r"\blucir hermosa\b": "sentirte comoda",
+        r"\btu mejor versi[oó]n\b": "sentirte comoda con el resultado",
+    }
+    cleaned = text
+    for pattern, replacement in replacements.items():
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    return cleaned
+
 
 def _load_response_times() -> None:
     global _response_times
@@ -658,6 +699,8 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         for h in body.history[-8:]:
             if h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": h["content"]})
+        if _is_qamiluna_content_request(p.name, body.message):
+            messages.append({"role": "system", "content": QAMILUNA_CONTENT_GUARDRAIL})
         messages.append({"role": "user", "content": body.message})
 
         # Monitor en vivo: un nuevo run_id invalida el anterior para pollers
@@ -687,6 +730,9 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             if _live_run["run_id"] == run_id:
                 _live_run["active"] = False
             raise HTTPException(502, f"Todos los proveedores fallaron: {str(e)[:200]}")
+
+        if _is_qamiluna_content_request(p.name, body.message):
+            reply = _sanitize_qamiluna_content_reply(reply)
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         if _live_run["run_id"] == run_id:

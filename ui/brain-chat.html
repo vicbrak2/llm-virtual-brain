@@ -117,3 +117,130 @@ function poll(){
 setInterval(poll, 350);
 })();
 </script>
+
+<style>
+/* Qamiluna Phase 1 additive UX: copy answers + mobile sidebar. */
+.qs-copy-button{position:absolute;top:6px;right:8px;z-index:2;border:1px solid #2a2e36;border-radius:6px;background:#1c2027;color:#e8b93c;font:700 11px Consolas,monospace;padding:4px 8px;opacity:.78;transition:opacity .15s ease,background .15s ease,color .15s ease}
+.qs-copy-button:hover,.qs-copy-button:focus{opacity:1;outline:none;background:#232a34}
+.qs-copy-button.qs-copied{background:#1f3d2b;color:#7ac98f}
+#qs-mobile-profiles{display:none;position:fixed;left:12px;top:70px;z-index:100000;border:1px solid #2a2e36;border-radius:8px;background:#e8b93c;color:#0d0f12;font:800 12px Consolas,monospace;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,.32)}
+#qs-mobile-backdrop{display:none;position:fixed;inset:0;z-index:99997;background:rgba(0,0,0,.55)}
+@media (max-width:760px){
+  html,body,#root{width:100%;height:100%;overflow:hidden}
+  body{min-width:0}
+  #qs-mobile-profiles{display:block}
+  #brain-monitor{left:12px;right:12px;bottom:64px;width:auto;max-width:none}
+  aside.w-72{position:fixed!important;left:0;top:0;bottom:0;z-index:99998;width:min(86vw,320px)!important;max-width:320px;transform:translateX(-105%);transition:transform .22s ease;box-shadow:8px 0 28px rgba(0,0,0,.35)}
+  body.qs-sidebar-open aside.w-72{transform:translateX(0)}
+  body.qs-sidebar-open #qs-mobile-backdrop{display:block}
+  main.flex-1{width:100vw;min-width:0}
+  main.flex-1>div:first-child{padding-left:12px!important;padding-right:12px!important}
+  main.flex-1 .max-w-3xl{max-width:100%!important}
+  main.flex-1 textarea{min-height:52px}
+  main.flex-1 .max-w-\[85\%\]{max-width:92%!important}
+  .qs-copy-button{top:5px;right:6px;padding:4px 7px}
+}
+</style>
+<script>
+(function(){
+function copyText(text){
+  if(navigator.clipboard && window.isSecureContext){
+    return navigator.clipboard.writeText(text);
+  }
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly','');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try{ document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+  return Promise.resolve();
+}
+function cleanBubbleText(bubble){
+  var clone = bubble.cloneNode(true);
+  clone.querySelectorAll('.qs-copy-button,details').forEach(function(el){ el.remove(); });
+  clone.querySelectorAll('div').forEach(function(el){
+    var style = el.getAttribute('style') || '';
+    if(style.indexOf('Consolas') !== -1 && style.indexOf('#5a6270') !== -1){
+      el.remove();
+    }
+  });
+  return (clone.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+}
+function isAssistantBubble(el){
+  var cs = window.getComputedStyle(el);
+  var bg = cs.backgroundColor;
+  var border = cs.borderTopColor;
+  var looksLikeAssistant = (
+    bg === 'rgb(21, 26, 33)' ||
+    bg === 'rgb(16, 20, 26)' ||
+    (bg.indexOf('21, 26, 33') !== -1)
+  ) && (
+    border === 'rgb(35, 43, 54)' ||
+    border === 'rgb(30, 36, 46)' ||
+    border.indexOf('35, 43, 54') !== -1
+  );
+  if(!looksLikeAssistant) return false;
+  if(el.closest('details')) return false;
+  var text = (el.textContent || '').trim();
+  return text.length > 30 && text.indexOf('pensando') !== 0;
+}
+function enhanceCopyButtons(){
+  document.querySelectorAll('main div').forEach(function(bubble){
+    if(!isAssistantBubble(bubble) || bubble.querySelector('.qs-copy-button')) return;
+    bubble.style.position = 'relative';
+    bubble.style.paddingRight = '72px';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'qs-copy-button';
+    btn.textContent = 'Copiar';
+    btn.title = 'Copiar respuesta';
+    btn.addEventListener('click', function(ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+      var text = cleanBubbleText(bubble);
+      copyText(text).then(function(){
+        btn.textContent = 'Copiado';
+        btn.classList.add('qs-copied');
+        setTimeout(function(){
+          btn.textContent = 'Copiar';
+          btn.classList.remove('qs-copied');
+        }, 1400);
+      });
+    });
+    bubble.appendChild(btn);
+  });
+}
+function mountMobileSidebar(){
+  if(document.getElementById('qs-mobile-profiles')) return;
+  var backdrop = document.createElement('div');
+  backdrop.id = 'qs-mobile-backdrop';
+  backdrop.addEventListener('click', function(){ document.body.classList.remove('qs-sidebar-open'); });
+  document.body.appendChild(backdrop);
+  var btn = document.createElement('button');
+  btn.id = 'qs-mobile-profiles';
+  btn.type = 'button';
+  btn.textContent = 'Perfiles';
+  btn.title = 'Abrir perfiles';
+  btn.addEventListener('click', function(){ document.body.classList.toggle('qs-sidebar-open'); });
+  document.body.appendChild(btn);
+  document.addEventListener('click', function(ev){
+    if(ev.target.closest('aside.w-72 button')){
+      document.body.classList.remove('qs-sidebar-open');
+    }
+  });
+}
+function tick(){
+  mountMobileSidebar();
+  enhanceCopyButtons();
+}
+var observer = new MutationObserver(tick);
+observer.observe(document.documentElement, {childList:true, subtree:true});
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', tick);
+} else {
+  tick();
+}
+})();
+</script>
