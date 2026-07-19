@@ -423,6 +423,21 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         Path(__file__).parent.parent / "ui" / "brain-chat.html",
     ]
     ui_file = next((p for p in ui_candidates if p and str(p) != "." and p.is_file()), None)
+    studio_candidates = [
+        Path("ui/studio.html"),
+        Path(__file__).parent.parent / "ui" / "studio.html",
+    ]
+    studio_file = next((p for p in studio_candidates if p.is_file()), None)
+    studio_manifest_candidates = [
+        Path("ui/studio-manifest.json"),
+        Path(__file__).parent.parent / "ui" / "studio-manifest.json",
+    ]
+    studio_manifest_file = next((p for p in studio_manifest_candidates if p.is_file()), None)
+    icon_dirs = [
+        Path("ui/icons"),
+        Path(__file__).parent.parent / "ui" / "icons",
+    ]
+    icon_dir = next((p for p in icon_dirs if p.is_dir()), None)
 
     @app.get("/", include_in_schema=False)
     async def ui_root():
@@ -434,6 +449,36 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             "<h1>Brain Server</h1><p>API en /api/*. UI no encontrada "
             "(coloca ui/brain-chat.html o define BRAIN_UI).</p>"
         )
+
+    @app.get("/studio", include_in_schema=False)
+    async def studio_facade():
+        if studio_file:
+            return FileResponse(
+                studio_file,
+                media_type="text/html",
+                headers={"Cache-Control": "no-store, must-revalidate"},
+            )
+        raise HTTPException(404, "Fachada Studio no encontrada")
+
+    @app.get("/studio/manifest.json", include_in_schema=False)
+    async def studio_manifest():
+        if studio_manifest_file:
+            return FileResponse(
+                studio_manifest_file,
+                media_type="application/manifest+json",
+                headers={"Cache-Control": "no-store, must-revalidate"},
+            )
+        raise HTTPException(404, "Manifest Studio no encontrado")
+
+    @app.get("/icons/{icon_name}", include_in_schema=False)
+    async def studio_icon(icon_name: str):
+        if not icon_dir:
+            raise HTTPException(404, "Iconos no encontrados")
+        safe_name = Path(icon_name).name
+        icon_file = icon_dir / safe_name
+        if not icon_file.is_file() or icon_file.suffix.lower() != ".png":
+            raise HTTPException(404, "Icono no encontrado")
+        return FileResponse(icon_file, media_type="image/png")
 
     @app.get("/api/health")
     async def health():

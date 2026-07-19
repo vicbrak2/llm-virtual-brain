@@ -1,0 +1,21 @@
+{
+  "name": "Qamiluna Studio",
+  "short_name": "Qamiluna",
+  "start_url": "/studio",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#faf6f0",
+  "theme_color": "#2a2416",
+  "icons": [
+    {
+      "src": "/icons/qamiluna-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/qamiluna-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

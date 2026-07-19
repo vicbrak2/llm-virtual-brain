@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Qamiluna Studio - Asistente del equipo</title>
+  <link rel="manifest" href="/studio/manifest.json">
+  <meta name="theme-color" content="#2a2416">
+  <meta name="robots" content="noindex,nofollow">
+  <style>
+    :root{
+      --bg:#faf6f0;
+      --panel:#fffaf4;
+      --card:#ffffff;
+      --accent:#b8895a;
+      --accent-dark:#8a633e;
+      --text:#2c2418;
+      --muted:#766758;
+      --border:#e8ddd0;
+      --shadow:0 12px 32px rgba(60,42,24,.10);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+    .shell{min-height:100%;display:flex;flex-direction:column}
+    header{position:sticky;top:0;z-index:5;background:rgba(255,250,244,.94);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+    .head{max-width:760px;margin:0 auto;padding:14px 16px;display:flex;align-items:center;gap:12px}
+    .brand-icon{width:38px;height:38px;border-radius:12px;object-fit:cover;box-shadow:0 4px 14px rgba(184,137,90,.22)}
+    .title{min-width:0}
+    h1{font-size:16px;line-height:1.2;margin:0;font-weight:750;letter-spacing:0}
+    .subtitle{font-size:12px;color:var(--muted);margin-top:2px}
+    .status{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap}
+    .dot{width:8px;height:8px;border-radius:999px;background:#d7a84e}
+    .dot.ok{background:#589b61}
+    .dot.err{background:#bd5b4f}
+    main{flex:1;width:100%;max-width:760px;margin:0 auto;display:flex;flex-direction:column}
+    #chat{flex:1;padding:18px 16px 120px;display:flex;flex-direction:column;gap:12px}
+    .welcome{background:var(--panel);border:1px solid var(--border);box-shadow:var(--shadow);border-radius:14px;padding:16px;line-height:1.5}
+    .welcome strong{display:block;margin-bottom:4px;color:var(--accent-dark)}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+    .chip{border:1px solid var(--border);background:#fff;border-radius:999px;padding:7px 10px;font-size:12px;color:var(--muted)}
+    .msg-wrap{display:flex;flex-direction:column;max-width:88%}
+    .msg-wrap.user{align-self:flex-end;align-items:flex-end}
+    .msg-wrap.bot{align-self:flex-start;align-items:flex-start}
+    .msg{width:100%;padding:11px 14px;border-radius:15px;line-height:1.55;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+    .msg strong{font-weight:760;color:var(--accent-dark)}
+    .user .msg{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+    .bot .msg{background:var(--card);border:1px solid var(--border);border-bottom-left-radius:4px;box-shadow:0 4px 18px rgba(60,42,24,.07)}
+    .meta{display:flex;gap:8px;align-items:center;margin-top:5px;color:#9a8b7b;font-size:11px}
+    .copy{border:1px solid var(--border);background:#fff;color:var(--accent-dark);border-radius:999px;padding:4px 8px;font-size:11px;font-weight:700}
+    .copy.done{background:#edf7ed;color:#497d4c;border-color:#cfe8d0}
+    .composer{position:fixed;left:0;right:0;bottom:0;z-index:6;background:linear-gradient(180deg,rgba(250,246,240,0),var(--bg) 18%);padding:24px 12px 12px}
+    .composer-inner{max-width:760px;margin:0 auto;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:8px;display:flex;gap:8px;box-shadow:0 10px 30px rgba(60,42,24,.14)}
+    textarea{flex:1;min-height:46px;max-height:140px;border:0;outline:none;resize:none;padding:10px 9px;font:inherit;font-size:15px;color:var(--text);background:transparent}
+    textarea::placeholder{color:#a79a8d}
+    #send{width:50px;min-width:50px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-weight:800;font-size:18px}
+    #send:disabled{opacity:.55}
+    .err-note{background:#fff0ed;border:1px solid #f0c9c0;color:#8a3d33}
+    @media (max-width:520px){
+      .head{padding:12px}
+      .brand-icon{width:34px;height:34px;border-radius:10px}
+      h1{font-size:15px}
+      .subtitle{font-size:11px}
+      .status span:last-child{display:none}
+      #chat{padding:14px 12px 112px}
+      .msg-wrap{max-width:94%}
+      .composer{padding-left:8px;padding-right:8px}
+      .composer-inner{border-radius:14px}
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="head">
+        <img class="brand-icon" src="/icons/qamiluna-icon.png" alt="">
+        <div class="title">
+          <h1>Qamiluna Studio</h1>
+          <div class="subtitle">Asistente interno del equipo</div>
+        </div>
+        <div class="status" aria-live="polite">
+          <span id="dot" class="dot"></span>
+          <span id="statusText">conectando</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="chat" aria-live="polite">
+        <div class="welcome">
+          <strong>Hola, equipo Qamiluna.</strong>
+          Pidan borradores de captions, Reels, historias, WhatsApp o dudas operativas. Todo lo que entregue el asistente queda para revisar antes de publicar o enviar.
+          <div class="chips">
+            <button class="chip" data-prompt="Dame 3 captions educativos sobre prueba previa de maquillaje de novia. Usa [PRECIO] si falta el valor.">3 captions</button>
+            <button class="chip" data-prompt="Arma un guion para Reel sobre como preparar la piel antes del maquillaje.">Guion Reel</button>
+            <button class="chip" data-prompt="Crea 5 historias interactivas para explicar valores, agenda y testimonios.">Historias</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <form id="composer" class="composer">
+      <div class="composer-inner">
+        <textarea id="txt" rows="1" placeholder="Escribe tu consulta..."></textarea>
+        <button id="send" type="submit" aria-label="Enviar">›</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const PROFILE = 'qamiluna_team';
+    const chat = document.getElementById('chat');
+    const txt = document.getElementById('txt');
+    const sendBtn = document.getElementById('send');
+    const dot = document.getElementById('dot');
+    const statusText = document.getElementById('statusText');
+    let history = [];
+    let busy = false;
+
+    function now(){
+      return new Date().toLocaleTimeString('es-CL', {hour:'2-digit', minute:'2-digit'});
+    }
+
+    function setStatus(kind, text){
+      dot.className = 'dot ' + (kind || '');
+      statusText.textContent = text;
+    }
+
+    function copyText(text){
+      if(navigator.clipboard && window.isSecureContext){
+        return navigator.clipboard.writeText(text);
+      }
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try{ document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+      return Promise.resolve();
+    }
+
+    function renderSafeMarkdown(text){
+      const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+      return escaped.replace(/\*\*([^*\n][^*]*?)\*\*/g, '<strong>$1</strong>');
+    }
+
+    function addMsg(role, content, opts = {}){
+      const wrap = document.createElement('div');
+      wrap.className = 'msg-wrap ' + (role === 'user' ? 'user' : 'bot');
+      const el = document.createElement('div');
+      el.className = 'msg' + (opts.error ? ' err-note' : '');
+      if(role === 'user' || opts.loading || opts.error){
+        el.textContent = content;
+      }else{
+        el.innerHTML = renderSafeMarkdown(content);
+      }
+      wrap.appendChild(el);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const stamp = document.createElement('span');
+      stamp.textContent = now();
+      meta.appendChild(stamp);
+      if(role !== 'user' && !opts.loading){
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'copy';
+        copy.textContent = 'Copiar';
+        copy.addEventListener('click', () => {
+          copyText(content).then(() => {
+            copy.textContent = 'Copiado';
+            copy.classList.add('done');
+            setTimeout(() => {
+              copy.textContent = 'Copiar';
+              copy.classList.remove('done');
+            }, 1400);
+          });
+        });
+        meta.appendChild(copy);
+      }
+      wrap.appendChild(meta);
+      chat.appendChild(wrap);
+      wrap.scrollIntoView({behavior:'smooth', block:'end'});
+      return wrap;
+    }
+
+    function autosize(){
+      txt.style.height = 'auto';
+      txt.style.height = Math.min(txt.scrollHeight, 140) + 'px';
+    }
+
+    async function checkHealth(){
+      try{
+        const r = await fetch('/api/health', {cache:'no-store'});
+        setStatus(r.ok ? 'ok' : 'err', r.ok ? 'conectado' : 'sin conexion');
+      }catch(e){
+        setStatus('err', 'sin conexion');
+      }
+    }
+
+    async function send(messageFromChip){
+      const message = (messageFromChip || txt.value).trim();
+      if(!message || busy) return;
+      busy = true;
+      sendBtn.disabled = true;
+      txt.value = '';
+      autosize();
+      addMsg('user', message);
+      history.push({role:'user', content:message});
+      const thinking = addMsg('assistant', 'escribiendo...', {loading:true});
+
+      try{
+        const r = await fetch('/api/chat', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            message,
+            profile:PROFILE,
+            history:history.slice(-8),
+            max_tokens:1200,
+            temperature:0.2,
+            refine:false
+          })
+        });
+        const data = await r.json().catch(() => ({}));
+        thinking.remove();
+        if(!r.ok){
+          addMsg('assistant', data.detail || 'No pude responder. Intenta de nuevo.', {error:true});
+          return;
+        }
+        const reply = data.reply || 'No pude responder. Intenta de nuevo.';
+        addMsg('assistant', reply);
+        history.push({role:'assistant', content:reply});
+      }catch(e){
+        thinking.remove();
+        addMsg('assistant', 'Error de conexion. Intenta de nuevo.', {error:true});
+      }finally{
+        busy = false;
+        sendBtn.disabled = false;
+        txt.focus();
+      }
+    }
+
+    document.getElementById('composer').addEventListener('submit', (e) => {
+      e.preventDefault();
+      send();
+    });
+    txt.addEventListener('input', autosize);
+    txt.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        send();
+      }
+    });
+    document.querySelectorAll('[data-prompt]').forEach((btn) => {
+      btn.addEventListener('click', () => send(btn.dataset.prompt));
+    });
+    checkHealth();
+    setInterval(checkHealth, 30000);
+  </script>
+</body>
+</html>
