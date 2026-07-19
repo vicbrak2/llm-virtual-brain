@@ -56,10 +56,17 @@ class Provider:
         return payload
 
     def parse_response(self, response_json: Dict) -> tuple:
-        """Extraer (contenido, truncado). Modelos de razonamiento (Cerebras)
-        pueden dejar content vacío y todo en reasoning — se acepta cualquiera
-        de los dos. `truncado=True` cuando finish_reason=="length": el
-        llamador decide si continuar la generación o rotar de provider."""
+        """Extraer (contenido, truncado). `truncado=True` cuando
+        finish_reason=="length": el llamador decide si continuar la
+        generación o rotar de provider.
+
+        Modelos de razonamiento (Cerebras con reasoning_effort alto, etc.)
+        a veces dejan "content" vacío y ponen todo en "reasoning" — pero ese
+        campo es el borrador interno del modelo (a menudo en inglés, sin
+        pulir, con frases tipo "the user is asking..."), NO una respuesta
+        para el usuario. Antes se aceptaba como fallback y se mostraba tal
+        cual en el chat; ahora se trata igual que un truncamiento: se falla
+        y se rota al siguiente provider en vez de mostrar razonamiento crudo."""
         try:
             choice = response_json["choices"][0]
             msg = choice["message"]
@@ -67,11 +74,9 @@ class Provider:
             truncated = choice.get("finish_reason") == "length"
             if content.strip():
                 return content, truncated
-            # Sin content y cortado por límite de tokens: el reasoning quedó a
-            # medias y no es una respuesta — mejor fallar y rotar de provider.
-            if truncated:
-                raise ValueError("truncado por max_tokens en pleno razonamiento (sin content)")
-            return msg.get("reasoning") or "", False
+            detail = ("truncado por max_tokens en pleno razonamiento" if truncated
+                      else "sin content (el modelo dejó todo en 'reasoning' interno, no es una respuesta)")
+            raise ValueError(f"{detail} (sin content)")
         except (KeyError, IndexError, TypeError) as e:
             raise ValueError(f"Formato de respuesta inválido: {e}")
 
