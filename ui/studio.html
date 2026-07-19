@@ -55,6 +55,10 @@
     textarea::placeholder{color:#a79a8d}
     #send{width:50px;min-width:50px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-weight:800;font-size:18px}
     #send:disabled{opacity:.55}
+    #improve{width:44px;min-width:44px;border:1px solid var(--border);border-radius:12px;background:#fff;color:var(--accent-dark);font-size:16px}
+    #improve:disabled{opacity:.5}
+    #improve.busy{animation:pulse 1s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
     .err-note{background:#fff0ed;border:1px solid #f0c9c0;color:#8a3d33}
     .md{white-space:normal}
     .md p{margin:0 0 8px}
@@ -121,6 +125,7 @@
     <form id="composer" class="composer">
       <div class="composer-inner">
         <textarea id="txt" rows="1" placeholder="Escribe tu consulta..."></textarea>
+        <button id="improve" type="button" aria-label="Mejorar consulta con IA" title="Mejorar consulta con IA">✨</button>
         <button id="send" type="submit" aria-label="Enviar">›</button>
       </div>
     </form>
@@ -287,6 +292,35 @@
     document.getElementById('composer').addEventListener('submit', (e) => {
       e.preventDefault();
       send();
+    });
+
+    const improveBtn = document.getElementById('improve');
+    improveBtn.addEventListener('click', async () => {
+      const current = txt.value.trim();
+      if(!current || improveBtn.disabled) return;
+      improveBtn.disabled = true;
+      improveBtn.classList.add('busy');
+      try{
+        const r = await fetch('/api/query/improve', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({message: current, profile: PROFILE}),
+        });
+        if(r.ok){
+          const data = await r.json();
+          if(data.improved){
+            txt.value = data.improved;
+            autosize();
+            txt.focus();
+            txt.setSelectionRange(txt.value.length, txt.value.length);
+          }
+        }
+      }catch(e){
+        // silencioso: si falla, el usuario sigue con su texto original
+      }finally{
+        improveBtn.disabled = false;
+        improveBtn.classList.remove('busy');
+      }
     });
     txt.addEventListener('input', autosize);
     txt.addEventListener('keydown', (e) => {

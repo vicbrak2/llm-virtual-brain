@@ -225,6 +225,11 @@ class ChatRequest(BaseModel):
     refine: bool = True  # pipeline multi-LLM (borrador → refina → final) con trace
 
 
+class ImproveQueryRequest(BaseModel):
+    message: str
+    profile: Optional[str] = None
+
+
 class ActivateRequest(BaseModel):
     name: str
 
@@ -693,6 +698,39 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
             "avg_ms": _avg_response_time(prof),
             "history_count": len(_response_times.get(prof) or []),
         }
+
+    @app.post("/api/query/improve")
+    async def improve_query(body: ImproveQueryRequest):
+        """Reescribe la consulta del usuario para que sea más clara y fácil de
+        resolver por la cadena multi-LLM, antes de enviarla como pregunta real.
+        Usa la misma cadena de providers del perfil (el primero que responda),
+        con una sola pasada corta — no es la respuesta final, solo la pulida
+        del input."""
+        message = (body.message or "").strip()
+        if not message:
+            raise HTTPException(400, "mensaje vacío")
+
+        p = get_profile(body.profile)
+        instruction = (
+            "Reescribe la siguiente consulta de un usuario para que sea clara, "
+            "específica y fácil de responder por un asistente con acceso a datos "
+            "reales de Instagram, Meta Ads y documentos internos de un negocio. "
+            "Mantén la intención original y el mismo idioma. Hazla más concreta "
+            "(qué período, qué métrica o dato exacto, qué formato de respuesta "
+            "espera) sin inventar información que el usuario no dio ni asumir "
+            "datos. Si ya es clara, mejórala mínimamente — no la alargues sin "
+            "necesidad. Responde ÚNICAMENTE con la consulta reescrita, sin "
+            "comillas, sin prefijos como 'Consulta:' y sin comentarios."
+        )
+        messages = [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": message},
+        ]
+        try:
+            improved = await p.brain.complete(messages, max_tokens=300, temperature=0.3)
+        except Exception as e:
+            raise HTTPException(502, f"No se pudo mejorar la consulta: {str(e)[:150]}")
+        return {"original": message, "improved": improved.strip()}
 
     @app.get("/api/documents")
     async def documents(profile: Optional[str] = None):

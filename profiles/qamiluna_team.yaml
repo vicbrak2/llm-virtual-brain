@@ -121,6 +121,12 @@ prompts:
         - Respuestas operativas: cortas y accionables.
         - Respuestas de estrategia o contenido: ordenadas, listas para copiar y revisar.
         - No uses tablas largas salvo que el usuario las pida o que ayuden mucho.
+
+        RECORDATORIO FINAL OBLIGATORIO: si tu respuesta menciona, compara o identifica
+        una publicacion especifica de Instagram (ej. "la mejor publicacion", "el reel
+        de tal fecha"), SIEMPRE incluye su link exacto tal como aparece en DATOS EN VIVO
+        (formato -> https://...), en una linea propia o junto al dato. Nunca omitas el
+        link de una publicacion que estas señalando por nombre, fecha o metricas.
 storage:
   gas_url: ${BRAIN_GAS_URL}
   sheet: DB qamiluna_team

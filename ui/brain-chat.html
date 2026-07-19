@@ -244,3 +244,94 @@ if(document.readyState === 'loading'){
 }
 })();
 </script>
+<style>
+#bm-improve-btn{background:#1c2027;border:1px solid #2a2e36;color:#e8b93c;border-radius:8px;padding:0 12px;font-size:15px;cursor:pointer;flex-shrink:0;line-height:1;height:auto;align-self:stretch}
+#bm-improve-btn:disabled{opacity:.5;cursor:default}
+#bm-improve-btn.bm-busy{animation:bm-improve-pulse 1s ease-in-out infinite}
+@keyframes bm-improve-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+<script>
+(function(){
+function brainBase(){
+  var s = window.location.origin.startsWith('http') ? window.location.origin : '';
+  var c = s || 'http://localhost:8080';
+  var e = localStorage.getItem('brain_api');
+  var manual = localStorage.getItem('brain_api_manual') === '1';
+  if(!s || (e && e===s) || (e && manual)) return (e || c);
+  return s;
+}
+
+function setNativeValue(el, value){
+  var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+  setter.call(el, value);
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+}
+
+function findComposerTextarea(){
+  var areas = document.querySelectorAll('textarea');
+  for (var i=0;i<areas.length;i++){
+    if ((areas[i].placeholder||'').indexOf('Pregunta al perfil') === 0) return areas[i];
+  }
+  return null;
+}
+
+function findSendButton(row){
+  var btns = row.querySelectorAll('button');
+  for (var i=0;i<btns.length;i++){
+    if (btns[i].textContent.trim() === '▶') return btns[i];
+  }
+  return null;
+}
+
+async function onImproveClick(btn, ta){
+  var current = ta.value.trim();
+  if (!current || btn.disabled) return;
+  btn.disabled = true;
+  btn.classList.add('bm-busy');
+  try{
+    var base = brainBase();
+    var r = await fetch(base + '/api/query/improve', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({message: current}),
+    });
+    if (r.ok){
+      var data = await r.json();
+      if (data.improved) {
+        setNativeValue(ta, data.improved);
+        ta.focus();
+      }
+    }
+  } catch(e){
+    // silencioso: si falla, el usuario sigue con su texto original
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('bm-busy');
+  }
+}
+
+function injectButton(){
+  if (document.getElementById('bm-improve-btn')) return;
+  var ta = findComposerTextarea();
+  if (!ta) return;
+  var row = ta.parentElement;
+  if (!row) return;
+  var sendBtn = findSendButton(row);
+  if (!sendBtn) return;
+
+  var btn = document.createElement('button');
+  btn.id = 'bm-improve-btn';
+  btn.type = 'button';
+  btn.title = 'Mejorar consulta con IA antes de enviar';
+  btn.textContent = '✨';
+  btn.addEventListener('click', function(){ onImproveClick(btn, ta); });
+
+  row.insertBefore(btn, sendBtn);
+}
+
+injectButton();
+var obs = new MutationObserver(injectButton);
+obs.observe(document.body, {childList:true, subtree:true});
+})();
+</script>
