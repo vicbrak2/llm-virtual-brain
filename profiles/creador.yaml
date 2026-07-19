@@ -7,13 +7,15 @@ providers:
   - name: "groq"
     api_key: "${GROQ_API_KEY}"
     model: "openai/gpt-oss-120b"
+  # Orden por costo tras groq (gratis): openrouter ($0.08/$0.45 por M) es mas
+  # barato que cerebras ($0.35/$0.75) — se prueba primero.
+  - name: "openrouter"
+    api_key: "${OPENROUTER_API_KEY}"
+    model: "nvidia/nemotron-3-super-120b-a12b"
   - name: "cerebras"
     api_key: "${CEREBRAS_API_KEY}"
     extra_body:
       reasoning_effort: "high"
-  - name: "openrouter"
-    api_key: "${OPENROUTER_API_KEY}"
-    model: "nvidia/nemotron-3-super-120b-a12b"
   - name: "hf"
     api_key: "${HF_TOKEN}"
 
