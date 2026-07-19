@@ -4,14 +4,14 @@ app_name: brain_qamiluna_team
 providers:
 - name: groq
   api_key: ${GROQ_API_KEY}
-  model: llama-3.3-70b-versatile
+  model: openai/gpt-oss-120b
 - name: cerebras
   api_key: ${CEREBRAS_API_KEY}
   extra_body:
     reasoning_effort: high
 - name: openrouter
   api_key: ${OPENROUTER_API_KEY}
-  model: nvidia/nemotron-3-ultra-550b-a55b:free
+  model: nvidia/nemotron-3-super-120b-a12b
 - name: hf
   api_key: ${HF_TOKEN}
 prompts:

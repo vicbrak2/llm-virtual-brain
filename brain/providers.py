@@ -98,8 +98,11 @@ KNOWN_PROVIDERS: Dict[str, Dict] = {
     },
     "groq": {
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        # verificado 2026-07: llama-3.3-70b-versatile sigue vigente; kimi-k2 no existe en Groq
-        "model": "llama-3.3-70b-versatile",
+        # llama-3.3-70b-versatile se apaga el 16-ago-2026 (deprecado por Groq).
+        # gpt-oss-120b: mismo precio de tier gratis (30 RPM/1K RPD/8K TPM/200K TPD)
+        # pero de pago sale mas barato que el resto de la cadena ($0.15/$0.60 por
+        # M de tokens) y no tiene fecha de apagado — migrado 2026-07.
+        "model": "openai/gpt-oss-120b",
     },
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -108,7 +111,10 @@ KNOWN_PROVIDERS: Dict[str, Dict] = {
     },
     "openrouter": {
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        # De pago (sin :free): $0.08/$0.45 por M tokens, mas barato que el resto
+        # de la cadena y sin los 429 del tier gratis compartido. Si la cuenta no
+        # tiene saldo, la llamada falla y la cadena rota a cerebras/hf (gratis).
+        "model": "nvidia/nemotron-3-super-120b-a12b",
     },
     "mistral": {
         "url": "https://api.mistral.ai/v1/chat/completions",
