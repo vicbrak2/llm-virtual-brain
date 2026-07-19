@@ -26,6 +26,7 @@ import os
 import re
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -307,6 +308,27 @@ async def _account_insights(client: httpx.AsyncClient, token: str, user_id: str)
                 top = sorted(hourly.items(), key=lambda kv: -kv[1])[:4]
                 desc = ", ".join(f"{int(h):02d}:00 UTC ({v})" for h, v in top)
                 lines.append(f"- Horas con más seguidores online (dato medido): {desc}")
+    except Exception:
+        pass
+    # Series diarias últimos 14 días: nuevos seguidores y alcance por día
+    # (no confundir con "impressions", que Meta deprecó para este tipo de cuenta)
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%d")
+        until = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = await _get(client, f"{user_id}/insights",
+                          metric="follower_count,reach", period="day",
+                          since=since, until=until, access_token=token)
+        by_metric = {d["name"]: d.get("values") or [] for d in data.get("data", [])}
+        followers_vals = by_metric.get("follower_count", [])
+        reach_vals = by_metric.get("reach", [])
+        reach_by_date = {v.get("end_time", "")[:10]: v.get("value", 0) for v in reach_vals}
+        if followers_vals:
+            lines.append("- Nuevos seguidores y alcance por día (últimos 14 días, UTC):")
+            for v in followers_vals:
+                fecha = v.get("end_time", "")[:10]
+                nuevos = v.get("value", 0)
+                reach_dia = reach_by_date.get(fecha, "?")
+                lines.append(f"  · {fecha}: +{nuevos} seguidores, alcance {reach_dia} cuentas")
     except Exception:
         pass
     return lines
