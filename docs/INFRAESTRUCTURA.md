@@ -109,6 +109,83 @@ de cuenta; el sistema usa "alcance" en su lugar y lo declara así en vez de inve
 | `general` | Público | Asistente de conocimiento general sobre documentos TXT subidos | Ninguno | — |
 | `creador` | Meta | Diseña y despliega nuevos sub-agentes vía conversación (genera YAML + Brain lo carga en caliente) | Ninguno | — |
 
+### 4.1-bis El agente del estudio (`qamiluna_team`) en detalle
+
+Es el agente más elaborado del sistema — el único con conectores en vivo, guardrails
+de marca y máquina de reglas de formato. Vive en `profiles/qamiluna_team.yaml`
+(system prompt de ~130 líneas). Se accede tanto desde el chat principal (`/`) como
+desde la fachada pública (`/studio`), y también es el que responde el botón
+"📊 Reporte IG" en ambas interfaces.
+
+**Cuatro áreas de trabajo declaradas en el prompt:**
+1. Operaciones internas (precios, traslados, promociones, agendamientos, planillas).
+2. Analítica didáctica de Instagram, Meta Ads y canales conectados.
+3. Estrategia de contenido basada en datos propios y lectura de mercado.
+4. Borradores de contenido y community management para revisión humana.
+
+**Guardrail de vocabulario de marca (aplica a captions/Reels/carruseles/historias/WhatsApp):**
+- Lista prohibida: "princesa", "reina", "brillar", "perfecto", "look único" sin
+  detalle, "gran día", "verdaderamente especial", "no te pierdas la oportunidad" —
+  y variantes cercanas.
+- Si aparecen igual, se reemplazan por observaciones concretas (duración, prueba
+  previa, piel, luz, fotos, comodidad, retoques, puntualidad, precio, decisión de la
+  clienta) — reforzado en dos capas: instrucción en el prompt **y** una sanitización
+  automática por regex en el backend (`_sanitize_qamiluna_content_reply`,
+  `brain/server.py`) que corre siempre como red de seguridad, incluso si el modelo
+  se saltó la regla.
+- Tono: español de Chile cercano y profesional, tuteo natural, **sin modismos**
+  ("po", "cachai", "al tiro" están explícitamente prohibidos). Voz Qamiluna/MusaQS:
+  cálida, clara, humana, sin presión.
+
+**Dieta editorial objetivo (estrategia comercial):**
+
+| Categoría | % objetivo | Objetivo |
+|---|---|---|
+| Educación | 30% | Enseñar, aclarar mitos, bajar ansiedad |
+| Casos reales | 25% | Transformación, proceso, testimonio |
+| Relato de marca | 20% | Identidad, valores, oficio |
+| Humor / identidad | 15% | Conectar con lo cotidiano sin ridiculizar |
+| Venta directa | 10% | Oferta, cupos, precios, agenda |
+
+**Formatos de contenido soportados** (cada uno con estructura obligatoria propia):
+captions (Tipo + Objetivo + Borrador + CTA + Nota interna), Reels (Hook 3s +
+Secuencia visual + Texto en pantalla + Caption + CTA), carruseles (portada + slides
+2-6 + caption + CTA), historias (3-5 frames + sticker sugerido), WhatsApp (mensaje
+breve marcado como borrador). Estructuras de copy permitidas: AIDA, PAS,
+Before-After-Bridge, Storytelling breve, Educativo directo — variadas entre
+opciones para no sonar repetitivo.
+
+**Reglas de analítica (cuando responde sobre métricas de Instagram):**
+1. Resumen de una línea primero, con lo más importante.
+2. Cada número acompañado de su significado en palabras simples (ej. "engagement =
+   de cada 100 seguidores, cuántos reaccionan").
+3. Comparación contra el promedio de la cuenta para dar contexto.
+4. Cierre con sección "Qué podemos hacer" (1-3 sugerencias accionables, tono
+   propositivo, no imperativo).
+5. Solo usa métricas que estén literalmente en `DATOS EN VIVO` — si falta un dato
+   lo dice, nunca lo inventa; "impresiones" se declara explícitamente como no
+   disponible en vez de omitirla en silencio.
+6. Nunca afirma horarios de mayor actividad salvo que el dato "horas con más
+   seguidores online" esté presente (viene en UTC, hay que restar 4h para Chile).
+7. Si hay comentarios "SIN RESPONDER" o DMs "ESPERANDO RESPUESTA", los menciona
+   proactivamente y prioriza — pero nunca publica ni responde nada por su cuenta.
+8. Toda publicación mencionada por nombre/fecha/métrica **debe** llevar su link
+   exacto tal como aparece en `DATOS EN VIVO` (regla reforzada con un "recordatorio
+   final obligatorio" al cierre del prompt, porque en pruebas tempranas el modelo
+   a veces omitía el link).
+
+**Reglas de seguridad y alcance (7 reglas explícitas en el prompt):** uso interno
+del equipo · nunca afirma haber publicado/enviado/respondido algo · deriva temas
+contables sensibles (sueldos, ganancias, deudas) a la contable · no revela datos
+personales de clientas · no inventa precios/fechas/cupos/links (usa marcadores
+`[PRECIO]`, `[FECHA]`, `[CUPO]`, `[LINK]`, `[SERVICIO]`) · aclara que ejecutar
+(publicar/agendar/responder automático) queda fuera de su alcance hasta que exista
+integración aprobada · **alcance obligatorio al negocio** (regla 7, agregada esta
+sesión: rechaza en una línea cualquier consulta o pedido de rol ajeno a Qamiluna).
+
+**Almacenamiento:** cada interacción relevante queda registrada en Google Sheets
+(`storage.sheet: "DB qamiluna_team"`, vía `BRAIN_GAS_URL`).
+
 ### 4.2 En el repo local, sin desplegar (creados ~2026-07-19/22, no commiteados)
 
 Estos archivos existen en `profiles/` pero son **untracked en git** (`git status`
