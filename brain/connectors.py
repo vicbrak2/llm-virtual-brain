@@ -878,6 +878,67 @@ async def connectors_health(connectors: list, trigger: bool = True) -> List[Dict
     return out
 
 
+async def fetch_qs_manager_context() -> Optional[str]:
+    """Fetch servicios activos y valores de traslado desde QS Manager V2 Web App."""
+    gas_url = os.getenv("QS_MANAGER_GAS_URL", "").strip()
+    api_key = os.getenv("QS_MANAGER_READ_API_KEY", "").strip()
+
+    if not gas_url or not api_key:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Fetch servicios activos
+            services_resp = await client.post(
+                gas_url,
+                json={"action": "list_active_services", "api_key": api_key},
+            )
+            services_data = services_resp.json() if services_resp.status_code == 200 else {}
+
+            # Fetch traslados por comuna
+            transport_resp = await client.post(
+                gas_url,
+                json={"action": "get_transport_values", "api_key": api_key, "limit": 200},
+            )
+            transport_data = transport_resp.json() if transport_resp.status_code == 200 else {}
+
+        # Formatear contexto para inyectar al LLM
+        lines = ["DATOS EN VIVO - QS MANAGER"]
+        lines.append(f"Generado: {services_data.get('result', {}).get('generated_at', 'N/A')}\n")
+
+        # Servicios activos
+        services = services_data.get("result", {}).get("services", [])
+        if services:
+            lines.append("SERVICIOS ACTIVOS")
+            for svc in services[:15]:
+                svc_id = svc.get("service_id", "")
+                nombre = svc.get("nombre_canonico", "")
+                precio = svc.get("precio_venta", "")
+                lines.append(f"- {svc_id} | {nombre} | Precio: ${precio}")
+        else:
+            lines.append("SERVICIOS ACTIVOS: (ninguno registrado)")
+
+        lines.append("")
+
+        # Traslados registrados
+        groups = transport_data.get("result", {}).get("groups", [])
+        if groups:
+            lines.append("TRASLADOS REGISTRADOS")
+            for group in groups:
+                comuna = group.get("comuna", "Sin comuna")
+                latest = group.get("latest_date", "")
+                values = group.get("transport_values", [])
+                value_strs = [f"${v['value']} ({v['count']})" for v in values]
+                lines.append(f"- {comuna}: {', '.join(value_strs)} | Ultimo: {latest}")
+        else:
+            lines.append("TRASLADOS REGISTRADOS: (ninguno registrado)")
+
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"[qs_manager] fetch falló: {str(e)[:120]}")
+        return None
+
+
 async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
     """Ejecutar los conectores soportados de un perfil.
 
@@ -899,6 +960,8 @@ async def run_connectors(connectors: list) -> Dict[str, Optional[str]]:
             results[name] = await fetch_messenger_context()
         elif c.get("type") == "threads":
             results[name] = await fetch_threads_context()
+        elif c.get("type") == "qs_manager":
+            results[name] = await fetch_qs_manager_context()
         else:
             results[name] = None
     return results

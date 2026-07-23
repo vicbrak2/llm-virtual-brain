@@ -11,6 +11,7 @@ Esto permite que el LLM use datos en vivo sin que el usuario haga múltiples req
 
 import asyncio
 import json
+import httpx
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -36,6 +37,7 @@ async def execute_connector(
         "instagram": handle_instagram,
         "facebook": handle_facebook,
         "backend": handle_backend,
+        "qs_manager": handle_qs_manager,
     }
 
     handler = handlers.get(conn_type)
@@ -115,6 +117,57 @@ async def handle_backend(
             "note": "[DEMO] Datos simulados; en producción usa backend interno real.",
         },
     }
+
+
+async def handle_qs_manager(
+    name: str, config: Dict, user_msg: str
+) -> Dict[str, Any]:
+    """QS Manager Web App connector — fetch active services + transport values."""
+    gas_url = config.get("gas_url") or ""
+    api_key = config.get("api_key") or ""
+
+    if not gas_url or not api_key:
+        return {
+            "status": "error",
+            "error": "Missing gas_url or api_key in connector config",
+            "data": None,
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            services_result = await client.post(
+                gas_url,
+                json={
+                    "action": "list_active_services",
+                    "api_key": api_key,
+                }
+            )
+            services_response = services_result.json() if services_result.status_code == 200 else {}
+
+            transport_result = await client.post(
+                gas_url,
+                json={
+                    "action": "get_transport_values",
+                    "api_key": api_key,
+                    "limit": 200,
+                }
+            )
+            transport_response = transport_result.json() if transport_result.status_code == 200 else {}
+
+        return {
+            "status": "ok",
+            "data": {
+                "services": services_response.get("result", {}).get("services", [])[:10],
+                "transport_groups": transport_response.get("result", {}).get("groups", []),
+                "generated_at": str(services_response.get("result", {}).get("generated_at", "")),
+            },
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"QS Manager connector error: {str(e)}",
+            "data": None,
+        }
 
 
 async def execute_all_connectors(

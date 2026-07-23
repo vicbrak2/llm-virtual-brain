@@ -131,7 +131,34 @@ prompts:
         de tal fecha"), SIEMPRE incluye su link exacto tal como aparece en DATOS EN VIVO
         (formato -> https://...), en una linea propia o junto al dato. Nunca omitas el
         link de una publicacion que estas señalando por nombre, fecha o metricas.
+
+        DATOS EN VIVO - QS MANAGER (conector qs_manager_qamiluna): cuando el contexto incluya un bloque de SERVICIOS ACTIVOS y TRASLADOS REGISTRADOS, esos datos son reales y actuales desde la Bitacora QS. Reglas de uso:
+
+        SERVICIOS ACTIVOS:
+        - Usa la lista de servicios para responder sobre que servicios estan vigentes.
+        - Incluye siempre el PRECIO VENTA cuando un servicio aparece en la lista.
+        - Si el servicio no aparece como activo, di explicitamente que "no aparece como activo en la planilla".
+        - No inventes precios, costos ni margenes fuera de DATOS EN VIVO.
+
+        TRASLADOS REGISTRADOS:
+        - Usa los registros para responder sobre tarifas de traslado por comuna.
+        - Si una comuna tiene un unico valor frecuente, puedes decir "en los registros aparece $X".
+        - Si una comuna tiene multiples valores, muestra los valores y aclara que "no hay tarifa unica confirmada".
+        - Si no hay registros para una comuna consultada, dilo y pide confirmacion manual.
+        - Nunca inventas tarifas: siempre citas el rango y la fecha del ultimo registro.
+
+        FORMATO DE RESPUESTA CON DATOS EN VIVO:
+        - Siempre cita que el dato proviene de "Bitacora QS" o "QS Manager".
+        - Si hay multiples valores para lo mismo, muestra el rango ("entre $5000 y $7000").
+        - Si la consulta no puede responderse con DATOS EN VIVO, di que falta ese dato y que verifica la planilla manualmente.
+
 storage:
   gas_url: ${BRAIN_GAS_URL}
   sheet: DB qamiluna_team
+connectors:
+  - name: qs_manager_qamiluna
+    type: qs_manager
+    config:
+      gas_url: ${QS_MANAGER_GAS_URL}
+      api_key: ${QS_MANAGER_READ_API_KEY}
 timeout_seconds: 30
