@@ -16,6 +16,7 @@ Perfiles: archivos YAML en --profiles (formato BrainConfig) con extras opcionale
       sheet: "Documentos"                                       # hoja destino
 """
 
+import hashlib
 import json
 import os
 import re
@@ -228,6 +229,30 @@ class ChatRequest(BaseModel):
 class ImproveQueryRequest(BaseModel):
     message: str
     profile: Optional[str] = None
+
+
+class InstagramReportRequest(BaseModel):
+    profile: Optional[str] = None
+    force: bool = False  # forzar regeneración aunque los datos no hayan cambiado
+
+
+IG_REPORT_PROMPT = (
+    "Genera un reporte completo y formateado con TODOS los datos de Instagram "
+    "disponibles en DATOS EN VIVO: resumen de cuenta (seguidores, alcance y "
+    "vistas de 28 días, demografía, horarios online), serie diaria de nuevos "
+    "seguidores y alcance (últimos 14 días) en una tabla, cada publicación "
+    "reciente con sus métricas (likes, comentarios, alcance, vistas, guardados, "
+    "compartidos) y su link, rendimiento por hashtag, resumen histórico mensual, "
+    "historias activas, comentarios sin responder y DMs esperando respuesta. "
+    "Usa tablas donde ayude a la lectura. No inventes ningún dato que no esté "
+    "en DATOS EN VIVO."
+)
+
+# Reporte de Instagram cacheado por perfil, keyed por hash del contexto real
+# (DATOS EN VIVO). La API de Instagram tiene límites y sus métricas no cambian
+# a cada rato — si el contexto es idéntico al de la última generación, se
+# devuelve el reporte ya generado en vez de gastar tokens de nuevo en el LLM.
+_ig_report_cache: Dict[str, Dict] = {}
 
 
 class ActivateRequest(BaseModel):
@@ -731,6 +756,44 @@ def create_app(profiles_dir: str = "profiles", data_dir: str = "data") -> FastAP
         except Exception as e:
             raise HTTPException(502, f"No se pudo mejorar la consulta: {str(e)[:150]}")
         return {"original": message, "improved": improved.strip()}
+
+    @app.post("/api/report/instagram")
+    async def instagram_report(body: InstagramReportRequest):
+        """Reporte completo y formateado de Instagram. Cachea la respuesta del
+        LLM por perfil, ligada a un hash del contexto real de DATOS EN VIVO:
+        si Meta no entregó datos nuevos desde la última vez, devuelve el
+        reporte ya generado sin gastar tokens de nuevo."""
+        p = get_profile(body.profile)
+        if not p.active:
+            raise HTTPException(409, f"El agente '{p.name}' está desactivado (usa /api/profile/toggle)")
+
+        from .connectors import fetch_instagram_context
+        ctx = await fetch_instagram_context()
+        if not ctx:
+            raise HTTPException(409, "Conector de Instagram no disponible (falta token o falló la API)")
+
+        ctx_hash = hashlib.sha256(ctx.encode("utf-8")).hexdigest()
+        cached = _ig_report_cache.get(p.name)
+        if not body.force and cached and cached["hash"] == ctx_hash:
+            return {"report": cached["report"], "cached": True, "generated_at": cached["generated_at"]}
+
+        system = ""
+        if p.brain.prompt_loader:
+            system = p.brain.prompt_loader.get("chat")
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "system", "content": f"DATOS EN VIVO — conector 'instagram_qamiluna' "
+                                          f"(obtenidos ahora de la API, son reales y actuales):\n\n{ctx}"},
+            {"role": "user", "content": IG_REPORT_PROMPT},
+        ]
+        try:
+            reply = await p.brain.complete(messages, max_tokens=4000, temperature=0.2)
+        except Exception as e:
+            raise HTTPException(502, f"No se pudo generar el reporte: {str(e)[:200]}")
+
+        generated_at = datetime.utcnow().isoformat() + "Z"
+        _ig_report_cache[p.name] = {"hash": ctx_hash, "report": reply, "generated_at": generated_at}
+        return {"report": reply, "cached": False, "generated_at": generated_at}
 
     @app.get("/api/documents")
     async def documents(profile: Optional[str] = None):

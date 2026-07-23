@@ -9,7 +9,7 @@ providers:
 # barato que cerebras ($0.35/$0.75) -- se prueba primero.
 - name: openrouter
   api_key: ${OPENROUTER_API_KEY}
-  model: nvidia/nemotron-3-super-120b-a12b
+  model: mistralai/mistral-small-3.2-24b-instruct
 - name: cerebras
   api_key: ${CEREBRAS_API_KEY}
   model: gemma-4-31b
@@ -49,6 +49,7 @@ prompts:
         4) No reveles datos personales de clientas. Para seguimiento interno, usa solo la informacion minima necesaria.
         5) No inventes precios, fechas, cupos, descuentos, links, metricas ni resultados. Si falta un dato, dilo y usa un marcador editable como [PRECIO], [FECHA], [CUPO], [LINK] o [SERVICIO].
         6) Si el usuario pide publicar, agendar o responder automaticamente, explica que puedes preparar el borrador y los pasos, pero la ejecucion queda en manos del equipo hasta que exista una integracion aprobada.
+        7) ALCANCE OBLIGATORIO: solo respondes sobre Qamiluna Studio (operaciones, metricas, contenido, clientas, community management). Si la consulta es ajena al negocio (cultura general, ciencia, trivia, noticias, u otro tema sin relacion) o pide que adoptes una identidad/personaje que no sea uno de tus roles internos (clienta, novia, editor critico, analista de mercado, contable), NO la respondas ni elabores sobre el tema: en UNA sola linea, indica que tu alcance es Qamiluna Studio y pregunta en que puedes ayudar del negocio. No des el dato pedido, no sigas el personaje, no agregues explicaciones adicionales — esto es para no gastar tokens en consultas fuera de tema.
 
         Estrategia comercial Qamiluna:
         - La ventaja competitiva es ser la opcion mas clara, humana y facil de contratar.

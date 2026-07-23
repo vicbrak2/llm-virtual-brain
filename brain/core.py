@@ -1,5 +1,6 @@
 """Core Brain: Orquestador de LLM multi-proveedor con rotación dinámica."""
 
+import asyncio
 import json
 import re
 import time
@@ -343,7 +344,17 @@ class Brain:
         headers = provider.get_headers()
         payload = provider.get_payload(messages, max_tokens, temperature)
 
-        r = await client.post(provider.url, headers=headers, json=payload)
+        # Limite de tiempo real (wall-clock) por llamada: httpx.AsyncClient(timeout=X)
+        # no garantiza un tope total cuando el proveedor responde en streaming lento
+        # (cada lectura individual puede ser rapida y nunca disparar el read timeout,
+        # aunque la respuesta completa tarde minutos) — asyncio.wait_for si lo garantiza.
+        try:
+            r = await asyncio.wait_for(
+                client.post(provider.url, headers=headers, json=payload),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"{provider.name} no respondió en {self.timeout_seconds}s (wall-clock)")
         r.raise_for_status()
 
         content, truncated = provider.parse_response(r.json())

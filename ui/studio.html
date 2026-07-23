@@ -29,7 +29,9 @@
     .title{min-width:0}
     h1{font-size:16px;line-height:1.2;margin:0;font-weight:750;letter-spacing:0}
     .subtitle{font-size:12px;color:var(--muted);margin-top:2px}
-    .status{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap}
+    #clearChat{margin-left:auto;border:1px solid var(--border);background:#fff;color:var(--muted);border-radius:10px;width:32px;height:32px;font-size:15px;line-height:1;flex-shrink:0}
+    #clearChat:hover{color:var(--accent-dark);border-color:var(--accent)}
+    .status{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;white-space:nowrap}
     .dot{width:8px;height:8px;border-radius:999px;background:#d7a84e}
     .dot.ok{background:#589b61}
     .dot.err{background:#bd5b4f}
@@ -49,6 +51,8 @@
     .meta{display:flex;gap:8px;align-items:center;margin-top:5px;color:#9a8b7b;font-size:11px}
     .copy{border:1px solid var(--border);background:#fff;color:var(--accent-dark);border-radius:999px;padding:4px 8px;font-size:11px;font-weight:700}
     .copy.done{background:#edf7ed;color:#497d4c;border-color:#cfe8d0}
+    #igReportBtn{position:fixed;left:50%;transform:translateX(-50%);bottom:104px;z-index:6;border:1px solid var(--border);background:var(--card);color:var(--accent-dark);border-radius:999px;padding:9px 16px;font-size:12.5px;font-weight:700;box-shadow:var(--shadow);white-space:nowrap}
+    #igReportBtn:disabled{opacity:.55}
     .composer{position:fixed;left:0;right:0;bottom:0;z-index:6;background:linear-gradient(180deg,rgba(250,246,240,0),var(--bg) 18%);padding:24px 12px 12px}
     .composer-inner{max-width:760px;margin:0 auto;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:8px;display:flex;gap:8px;box-shadow:0 10px 30px rgba(60,42,24,.14)}
     textarea{flex:1;min-height:46px;max-height:140px;border:0;outline:none;resize:none;padding:10px 9px;font:inherit;font-size:15px;color:var(--text);background:transparent}
@@ -101,6 +105,7 @@
           <h1>Qamiluna Studio</h1>
           <div class="subtitle">Asistente interno del equipo</div>
         </div>
+        <button id="clearChat" type="button" aria-label="Limpiar chat" title="Limpiar chat">🗑</button>
         <div class="status" aria-live="polite">
           <span id="dot" class="dot"></span>
           <span id="statusText">conectando</span>
@@ -121,6 +126,8 @@
         </div>
       </section>
     </main>
+
+    <button id="igReportBtn" type="button" title="Generar reporte completo de Instagram">📊 Reporte completo IG</button>
 
     <form id="composer" class="composer">
       <div class="composer-inner">
@@ -169,7 +176,7 @@
     // window.__md) — tablas, listas, titulos, citas, codigo y enlaces.
     function renderSafeMarkdown(src){
       function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
-      function inline(s){s=s.replace(/`([^`]+)`/g,function(m,c){return"<code>"+c+"</code>"});s=s.replace(/\*\*([^*]+(?:\*(?!\*)[^*]*)*)\*\*/g,"<strong>$1</strong>");s=s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g,"$1<em>$2</em>");s=s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');return s}
+      function inline(s){s=s.replace(/`([^`]+)`/g,function(m,c){return"<code>"+c+"</code>"});s=s.replace(/\*\*([^*]+(?:\*(?!\*)[^*]*)*)\*\*/g,"<strong>$1</strong>");s=s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g,"$1<em>$2</em>");s=s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');s=s.replace(/(?<!href=")(https?:\/\/[^\s<>"']+)/g,function(m,url){var trail="";var clean=url;while(/[.,;:!?)\]}]$/.test(clean)){trail=clean.slice(-1)+trail;clean=clean.slice(0,-1)}return'<a href="'+clean+'" target="_blank" rel="noopener">'+clean+'</a>'+trail});return s}
       function table(lines,i){if(!/^\s*\|.*\|\s*$/.test(lines[i]||"")||!/^\s*\|[\s\-:|]+\|\s*$/.test(lines[i+1]||""))return null;var rows=[],j=i;while(j<lines.length&&/^\s*\|.*\|\s*$/.test(lines[j])){rows.push(lines[j]);j++}var cells=function(l){l=l.trim().replace(/^\|/,"").replace(/\|$/,"");return l.split("|").map(function(c){return inline(c.trim())})};var h="<table><thead><tr>"+cells(rows[0]).map(function(c){return"<th>"+c+"</th>"}).join("")+"</tr></thead><tbody>";for(var k=2;k<rows.length;k++)h+="<tr>"+cells(rows[k]).map(function(c){return"<td>"+c+"</td>"}).join("")+"</tr>";return[h+"</tbody></table>",j]}
       var out="",parts=String(src||"").replace(/\r\n/g,"\n").split(/```\w*\n?/);
       for(var p=0;p<parts.length;p++){
@@ -246,7 +253,7 @@
       }
     }
 
-    async function send(messageFromChip){
+    async function send(messageFromChip, opts = {}){
       const message = (messageFromChip || txt.value).trim();
       if(!message || busy) return;
       busy = true;
@@ -265,7 +272,7 @@
             message,
             profile:PROFILE,
             history:history.slice(-8),
-            max_tokens:1200,
+            max_tokens:opts.maxTokens || 1200,
             temperature:0.2,
             refine:false
           })
@@ -332,6 +339,49 @@
     document.querySelectorAll('[data-prompt]').forEach((btn) => {
       btn.addEventListener('click', () => send(btn.dataset.prompt));
     });
+
+    const igReportBtn = document.getElementById('igReportBtn');
+    igReportBtn.addEventListener('click', async () => {
+      if(busy) return;
+      busy = true;
+      igReportBtn.disabled = true;
+      addMsg('user', '📊 Reporte completo de Instagram');
+      const thinking = addMsg('assistant', 'generando reporte...', {loading:true});
+      try{
+        const r = await fetch('/api/report/instagram', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({profile: PROFILE}),
+        });
+        const data = await r.json().catch(() => ({}));
+        thinking.remove();
+        if(!r.ok){
+          addMsg('assistant', data.detail || 'No pude generar el reporte. Intenta de nuevo.', {error:true});
+          return;
+        }
+        let reply = data.report || 'No pude generar el reporte.';
+        if(data.cached){
+          const genTime = data.generated_at ? new Date(data.generated_at).toLocaleTimeString('es-CL', {hour:'2-digit', minute:'2-digit'}) : '';
+          reply += `\n\n_(sin cambios en los datos de Instagram desde las ${genTime} — no se volvió a consultar el LLM)_`;
+        }
+        addMsg('assistant', reply);
+      }catch(e){
+        thinking.remove();
+        addMsg('assistant', 'Error de conexión. Intenta de nuevo.', {error:true});
+      }finally{
+        busy = false;
+        igReportBtn.disabled = false;
+      }
+    });
+    document.getElementById('clearChat').addEventListener('click', () => {
+      if(busy) return;
+      if(!confirm('¿Limpiar la conversación?')) return;
+      history = [];
+      document.querySelectorAll('.msg-wrap').forEach(el => el.remove());
+      txt.value = '';
+      autosize();
+    });
+
     checkHealth();
     setInterval(checkHealth, 30000);
   </script>

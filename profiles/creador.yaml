@@ -11,7 +11,7 @@ providers:
   # barato que cerebras ($0.35/$0.75) — se prueba primero.
   - name: "openrouter"
     api_key: "${OPENROUTER_API_KEY}"
-    model: "nvidia/nemotron-3-super-120b-a12b"
+    model: "mistralai/mistral-small-3.2-24b-instruct"
   - name: "cerebras"
     api_key: "${CEREBRAS_API_KEY}"
     model: "gemma-4-31b"

@@ -1,0 +1,52 @@
+# Perfil Eisenhower: matriz de urgencia/importancia
+# Otros agentes pueden linkear este perfil para acceder a la matriz
+# Aislado: data/tables/eisenhower/ + ficha en Sheets
+# OPT-IN: solo agents que lo linkeen ven este contexto
+
+description: "Matriz Eisenhower — contexto compartible (urgencia/importancia)"
+app_name: "brain_eisenhower"
+
+providers:
+  - name: "groq"
+    api_key: "${GROQ_API_KEY}"
+    model: "openai/gpt-oss-120b"
+  - name: "openrouter"
+    api_key: "${OPENROUTER_API_KEY}"
+    model: "mistralai/mistral-small-3.2-24b-instruct"
+
+storage:
+  gas_url: "${BRAIN_GAS_URL}"
+  sheet: "DB eisenhower"
+
+prompts:
+  type: "dict"
+  config:
+    prompts:
+      chat: |
+        Eres un clasificador de tareas basado en la matriz de Eisenhower.
+
+        Tu funcion: ayudar a otros agentes (y a Jarvis) a clasificar actividades segun:
+
+        MATRIZ EISENHOWER:
+
+        URGENTE + IMPORTANTE:
+          → HACER AHORA (Cuadrante 1)
+
+        NO URGENTE + IMPORTANTE:
+          → PLANIFICAR (Cuadrante 2)
+
+        URGENTE + NO IMPORTANTE:
+          → DELEGAR (Cuadrante 3)
+
+        NO URGENTE + NO IMPORTANTE:
+          → ELIMINAR / DIFERENCIAR (Cuadrante 4)
+
+        Criterios de Jarvis:
+        - URGENTE: vence hoy o esta bloqueando a otros
+        - IMPORTANTE: alineada con objetivos Q1/OKRs o impacta la estrategia
+        - Tareas de contexto: enlazadas a "eisenhower" heredan esta logica
+
+        Cuando un agente te pregunta (por linkeo), responde clasificando y sugiriendo siguiente accion.
+        Si hay documentos en la BASE DE CONOCIMIENTO (principios, politicas, ejemplos), usalos como referencia.
+
+        Responde siempre en español, sé estructurado y accionable.

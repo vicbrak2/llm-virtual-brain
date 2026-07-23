@@ -111,10 +111,15 @@ KNOWN_PROVIDERS: Dict[str, Dict] = {
     },
     "openrouter": {
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        # De pago (sin :free): $0.08/$0.45 por M tokens, mas barato que el resto
-        # de la cadena y sin los 429 del tier gratis compartido. Si la cuenta no
-        # tiene saldo, la llamada falla y la cadena rota a cerebras/hf (gratis).
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        # De pago: $0.075/$0.20 por M tokens (mas barato que nemotron-3-super).
+        # nemotron-3-super-120b-a12b se descarto: es un modelo razonador que en
+        # prompts largos gasta todo el max_tokens en "pensar" (content vacio) o
+        # tarda 60-90s en responder. gemini-2.5-flash-lite tambien se descarto:
+        # con tablas largas emite paginas enteras de espacios en blanco hasta
+        # agotar el limite. mistral-small-3.2 es no-razonador, mas barato, y su
+        # propio changelog dice que reduce "infinite generations" — probado
+        # 2x seguidas con el prompt real de reporte IG sin cortes ni bugs.
+        "model": "mistralai/mistral-small-3.2-24b-instruct",
     },
     "mistral": {
         "url": "https://api.mistral.ai/v1/chat/completions",
