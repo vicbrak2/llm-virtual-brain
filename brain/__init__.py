@@ -48,7 +48,7 @@ from .prompts import (
     loader_from_dict,
 )
 
-__version__ = "1.5.1"
+__version__ = "1.5.3"
 __all__ = [
     "Brain",
     "Message",
