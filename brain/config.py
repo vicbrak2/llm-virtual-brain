@@ -19,7 +19,7 @@ class BrainProfile(str, Enum):
 
 # ── Cadena de providers POR DEFECTO (aplica a todos los agentes si no especifican) ──
 # Cambiar aquí afecta a todos los perfiles globalmente.
-# Orden: groq (gratis/rápido) → openrouter (barato/versátil) → cerebras (razonamiento) → hf (fallback)
+# Orden: groq (rápido/barato) → openrouter (barato/versátil) → cerebras (razonamiento) → hf (fallback)
 DEFAULT_PROVIDERS = [
     {
         "name": "groq",
@@ -29,12 +29,12 @@ DEFAULT_PROVIDERS = [
     {
         "name": "openrouter",
         "api_key": "${OPENROUTER_API_KEY}",
-        "model": "mistralai/mistral-small-3.2-24b-instruct",
+        "model": "qwen/qwen3-30b-a3b-instruct-2507",
     },
     {
         "name": "cerebras",
         "api_key": "${CEREBRAS_API_KEY}",
-        "model": "gemma-4-31b",
+        "model": "gpt-oss-120b",
         "extra_body": {
             "reasoning_effort": "high",
         },

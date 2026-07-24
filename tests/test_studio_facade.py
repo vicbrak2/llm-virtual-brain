@@ -17,7 +17,8 @@ def test_studio_facade_serves_public_team_page(tmp_path):
     assert "/api/chat" in response.text
     assert "/api/profiles" not in response.text
     assert "/api/profile/delete" not in response.text
-    assert "brain-chat.html" not in response.text
+    assert '<script src="' not in response.text
+    assert "createRoot" not in response.text
 
 
 def test_studio_manifest_and_icons_are_available(tmp_path):

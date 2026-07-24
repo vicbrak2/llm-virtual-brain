@@ -10,21 +10,41 @@ Definida en `brain/config.py`:
 DEFAULT_PROVIDERS = [
     {
         "name": "groq",
-        "model": "openai/gpt-oss-120b",      # Rápido, gratis (100 requests/min)
+        "model": "openai/gpt-oss-120b",      # Principal: rápido y bajo costo
     },
     {
         "name": "openrouter",
-        "model": "mistralai/mistral-small-3.2-24b-instruct",  # Barato ($0.08/$0.45 por M)
+        "model": "qwen/qwen3-30b-a3b-instruct-2507",  # Fallback barato para redacción/instrucciones
     },
     {
         "name": "cerebras",
-        "model": "gemma-4-31b",              # Razonamiento (fallback a reasoning_effort: high)
+        "model": "gpt-oss-120b",             # Fallback de razonamiento sin costo excesivo
         "extra_body": {"reasoning_effort": "high"},
     },
     {
         "name": "hf",                        # Fallback universal (HuggingFace)
     },
 ]
+```
+
+## Modelos vigentes recomendados
+
+| Provider | Modelo | Rol | Costo relativo |
+|----------|--------|-----|----------------|
+| Groq | `openai/gpt-oss-120b` | Principal rápido para chat, métricas y contenido | Bajo |
+| OpenRouter | `qwen/qwen3-30b-a3b-instruct-2507` | Fallback barato para redacción, español y respuestas largas | Muy bajo |
+| Cerebras | `gpt-oss-120b` | Fallback de razonamiento cuando los anteriores fallen | Medio-bajo |
+| Hugging Face | default del provider (`Qwen/Qwen2.5-72B-Instruct`) | Último respaldo si falla la cadena | Variable |
+
+Si Qwen por OpenRouter muestra inestabilidad en producción, el rollback recomendado
+es volver el segundo provider a:
+
+```python
+{
+    "name": "openrouter",
+    "api_key": "${OPENROUTER_API_KEY}",
+    "model": "mistralai/mistral-small-3.2-24b-instruct",
+}
 ```
 
 ## Cambiar globalmente
@@ -35,8 +55,8 @@ Modifica `DEFAULT_PROVIDERS` directamente. Afecta a TODOS los agentes que no esp
 
 ```python
 DEFAULT_PROVIDERS = [
-    {"name": "cerebras", "model": "gemma-4-31b", ...},  # Prioritario
-    {"name": "groq", "model": "...", ...},
+    {"name": "groq", "model": "openai/gpt-oss-120b", ...},
+    {"name": "openrouter", "model": "qwen/qwen3-30b-a3b-instruct-2507", ...},
     ...
 ]
 ```
@@ -132,5 +152,7 @@ Si es DEFAULT_PROVIDERS: va primero groq, si falla → openrouter, etc.
 
 | Versión | Cambio | Razón |
 |---------|--------|-------|
+| v1.5.4  | OpenRouter pasa a Qwen3 30B A3B y Cerebras a gpt-oss-120b | Mejorar calidad/costo sin usar modelos premium |
+| v1.5.3  | Perfiles sin providers explícitos heredan DEFAULT_PROVIDERS | Nuevos agentes heredan la cadena global |
 | v1.5.2  | Centralizar providers en config.py | Consistencia global, fácil cambio |
 | v1.5.1  | groq + openrouter + cerebras + hf | Orden por costo/velocidad/resiliencia |
