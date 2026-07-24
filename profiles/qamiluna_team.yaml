@@ -1,22 +1,10 @@
 description: Agente interno de Qamiluna Studio para operaciones, métricas, estrategia
   de contenido y borradores de community management con revisión humana.
 app_name: brain_qamiluna_team
-providers:
-- name: groq
-  api_key: ${GROQ_API_KEY}
-  model: openai/gpt-oss-120b
-# Orden por costo tras groq (gratis): openrouter ($0.08/$0.45 por M) es mas
-# barato que cerebras ($0.35/$0.75) -- se prueba primero.
-- name: openrouter
-  api_key: ${OPENROUTER_API_KEY}
-  model: mistralai/mistral-small-3.2-24b-instruct
-- name: cerebras
-  api_key: ${CEREBRAS_API_KEY}
-  model: gemma-4-31b
-  extra_body:
-    reasoning_effort: high
-- name: hf
-  api_key: ${HF_TOKEN}
+
+# NOTA: No especifica providers → usa DEFAULT_PROVIDERS de brain/config.py
+# (groq gratis → openrouter barato → cerebras reasoning → hf fallback)
+# Para cambiar la cadena LLM globalmente (todos los agentes), edita brain/config.py
 prompts:
   type: dict
   config:

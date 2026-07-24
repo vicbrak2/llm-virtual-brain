@@ -17,6 +17,35 @@ class BrainProfile(str, Enum):
     RESILIENT = "resilient"  # Todos (máxima resiliencia)
 
 
+# ── Cadena de providers POR DEFECTO (aplica a todos los agentes si no especifican) ──
+# Cambiar aquí afecta a todos los perfiles globalmente.
+# Orden: groq (gratis/rápido) → openrouter (barato/versátil) → cerebras (razonamiento) → hf (fallback)
+DEFAULT_PROVIDERS = [
+    {
+        "name": "groq",
+        "api_key": "${GROQ_API_KEY}",
+        "model": "openai/gpt-oss-120b",
+    },
+    {
+        "name": "openrouter",
+        "api_key": "${OPENROUTER_API_KEY}",
+        "model": "mistralai/mistral-small-3.2-24b-instruct",
+    },
+    {
+        "name": "cerebras",
+        "api_key": "${CEREBRAS_API_KEY}",
+        "model": "gemma-4-31b",
+        "extra_body": {
+            "reasoning_effort": "high",
+        },
+    },
+    {
+        "name": "hf",
+        "api_key": "${HF_TOKEN}",
+    },
+]
+
+
 class ProviderConfig(BaseModel):
     """Configuración de un proveedor LLM. url/model/token_param son opcionales
     para nombres conocidos (se completan con defaults de KNOWN_PROVIDERS)."""
@@ -53,7 +82,11 @@ class BrainConfig(BaseModel):
 
 
 def load_config_from_yaml(yaml_path: str) -> BrainConfig:
-    """Cargar configuración desde YAML (con substitución ${VAR} / ${VAR:default})."""
+    """Cargar configuración desde YAML (con substitución ${VAR} / ${VAR:default}).
+
+    Si el YAML no especifica 'providers', usa DEFAULT_PROVIDERS (centralizado en config.py).
+    Esto asegura que todos los agentes usan la misma cadena LLM por defecto.
+    """
     try:
         import yaml
     except ImportError:
@@ -65,6 +98,10 @@ def load_config_from_yaml(yaml_path: str) -> BrainConfig:
 
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+
+    # Si no hay providers en el YAML, usar DEFAULT_PROVIDERS (cadena centralizada)
+    if "providers" not in data or not data["providers"]:
+        data["providers"] = DEFAULT_PROVIDERS
 
     return BrainConfig(**_substitute_env_vars(data))
 
